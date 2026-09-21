@@ -71,7 +71,7 @@ false impression that they are controlling something.
 | `gradient_length = 1860.0` | seconds; v1's RT model output is scaled onto this, then mapped to the reference's frame times | none. `--n-frames 0` inherits the reference frame count (`render.rs:391-398`); the RT index is linearly stretched onto `[0, n_frames-1]` (`render.rs:490`) | **(b)** | Same *effective* span here (1861.3 s reference vs 1860.0 declared, 0.07 % apart), but the mechanism differs: v1 anchors RT in **seconds** and can disagree with the reference; v2 anchors it in **frames** and cannot. Setting `gradient_length` to anything other than the reference's own length is a v1-only capability. |
 | `reference_in_memory`, `num_threads`, `batch_size`, `use_gpu`, `gpu_memory_limit_gb`, `lazy_frame_assembly`, `frame_batch_size`, `silent_mode`, `log_level` | execution/resource knobs | necroflow `threads=`/`ram=` declarations (`timsim_flow.py:694`, `:601-605`), `--render-chunks`, `--no-parallel` | **(c)** | No model effect in either tool. Listed so the benchmark manifest can record them as *cost* variables, not accuracy variables. |
 | `use_bruker_sdk = true` | write the `.d` via the Bruker SDK when available | none — v2 always writes through `ms-io`'s `TdfWriter` | **(c)** | Bounded: any writer-level difference in the produced `.d` is a v1-vs-v2 difference the benchmark cannot control for. |
-| `emit_provenance = true`, `provenance_embed = true`, `provenance_key_path` | Ed25519-signed mzPROV self-disclosure, embedded in `analysis.tdf` | none — no `provenance`/`mzprov` symbol in `timsim-cli/src/bin/render.rs` | **(c)** | v1's default is ON, so the v1 arm's `.d` carries an extra table the v2 arm's does not. Confirm DiaNN ignores it (it should) or disable it for the benchmark. |
+| `emit_provenance = true`, `provenance_embed = true`, `provenance_key_path` | Ed25519-signed mzPROV self-disclosure, embedded in `analysis.tdf` | the flow's `sign` node, on by default (`--no-sign`, `--sign-key`): an mzprov **sidecar** beside a link to the render, never embedded | **(c)** | v2 never alters the `.d`. v1's default EMBEDS, so the v1 arm's `.d` carries an extra table the v2 arm's does not; set `provenance_embed = false` (sidecar) or `emit_provenance = false` in v1 to keep the two `.d` files structurally comparable. |
 
 ## 2. Digestion and the peptide space
 
@@ -253,7 +253,7 @@ reference_path = "/media/hd02/data/raw/dia/blanks/blanks-dia-PASEF/G241217_011_S
 acquisition_type   = "DIA"
 use_reference_layout = true
 apply_fragmentation  = true
-emit_provenance = false     # (c) mzPROV: v2 cannot emit it; keep the two .d files structurally comparable
+emit_provenance = false     # (c) mzPROV: v1 embeds into the .d, v2 signs by sidecar; keep the two .d files structurally comparable
 
 [peptide_digestion]
 num_sample_peptides = 10000   # matched to v2 --max-peptides; see the (b) note — this is the distorting knob

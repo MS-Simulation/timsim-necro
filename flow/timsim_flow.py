@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -348,6 +349,15 @@ class SciexTruthV2(NodeType):
     filename = "truth.parquet"
 
 
+class RunProvenance(NodeType):
+    """An mzprov signature over one rendered run, declaring it TimSim-simulated. A LEAF beside the render:
+    the node links to the render's output and writes the signature next to the link, so the render's own
+    bytes (and content hash) never change and toggling `--no-sign` re-renders nothing. `mzprov verify
+    <this node>/data.d` (or data.raw / data.mzML) checks the render in place. See `sign_output.py`."""
+
+    filename = "data.provenance.json"
+
+
 class DiannReport(NodeType):
     """A DiaNN library-free search of the rendered `.raw` — the SEARCH half of phase 2. A directory node
     (DiaNN emits report.parquet + stats + the predicted lib alongside). Restages when the search FASTA
@@ -492,6 +502,46 @@ def _a2_kwargs(cfg) -> dict:
         "noise_precursor_fraction": getattr(cfg, "noise_precursor_fraction", 0.2),
         "noise_fragment_fraction": getattr(cfg, "noise_fragment_fraction", 0.2),
     }
+
+
+SIGN_SCRIPT = Path(__file__).resolve().parent / "sign_output.py"
+
+
+@command(
+    f"python {SIGN_SCRIPT} --artifact {{artifact}} --kind {{kind}} --truth {{truth}} "
+    "--sidecar {provenance} --experiment-name {sample_id} --tool-version {tool_version} "
+    "--config-json {config_json} --key {sign_key}",
+    threads=1,
+    ram="2Gi",
+)
+def sign(
+    artifact: BrukerRawDataV2 | BrukerDdaData | ThermoRawData | SciexMzmlData,
+    truth: BrukerTruthV2 | DdaTruth | ThermoTruth | SciexTruthV2,
+    kind: str,
+    sample_id: str,
+    tool_version: str,
+    config_json: str,
+    sign_key: str,
+):
+    """PROVENANCE: sign the rendered run with mzprov (TimSim self-disclosure, as v1 does by default). The
+    signed configuration is the run's full cfg plus the answer key's SHA-256; the renderer is identified by
+    binary name and content hash, since the v2 binaries expose no --version."""
+    provenance = output(RunProvenance)
+    return provenance
+
+
+def do_sign(cfg, sample_id, P, artifact, truth, kind, renderer):
+    """The sign node for one render, or None when signing is off (`--no-sign`)."""
+    if not getattr(cfg, "sign", True):
+        return None
+    run = {k: v for k, v in sorted(vars(cfg).items()) if k not in ("sign", "sign_key")}
+    run["sample_id"] = sample_id
+    return sign(
+        P, artifact, truth, kind=kind, sample_id=sample_id,
+        tool_version=f"{renderer}@sha256:{_tool_sha(renderer)}",
+        config_json=json.dumps(run, sort_keys=True, default=str),
+        sign_key=getattr(cfg, "sign_key", None) or "",
+    )
 
 
 def do_render(cfg, sample_id, P, control=False):
@@ -1458,6 +1508,7 @@ def timsim_thermo_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
         min_peak_intensity_ms2=getattr(cfg, "min_peak_intensity_ms2", 0.0),
         template_ms1_median=getattr(cfg, "template_ms1_median", 0.0),
     )
+    P.signed = do_sign(cfg, sample_id, P, P.raw, P.truth, "raw", "timsim-render-thermo")
     # ── phase 2 (opt-in): search the .raw + score against the answer key ──
     if getattr(cfg, "search_fasta", None):
         P.diann = search(P, 
@@ -1516,6 +1567,7 @@ def timsim_bruker_v2_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
         P.precursors, P.peptides, P.modforms, P.modifications, P.fragment_intensities
     )
     P.raw, P.truth = do_render(cfg, sample_id, P)
+    P.signed = do_sign(cfg, sample_id, P, P.raw, P.truth, "d", "timsim-render")
     # ── phase 2 (opt-in): DiaNN-search the .d natively + score against the answer key ──
     if getattr(cfg, "search_fasta", None) and getattr(cfg, "phospho", False):
         # Phospho site-localization: DiaNN with --monitor-mod (localization), scored by FLR vs the render's
@@ -1692,6 +1744,7 @@ def timsim_bruker_dda_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
         mobility_std_target=cfg.mobility_std_target,
         n_sigma=cfg.n_sigma,
     )
+    P.signed = do_sign(cfg, sample_id, P, P.raw, P.truth, "d", "timsim-render")
     # ── phase 2 (opt-in): Sage-search the .d + score against the selection-event answer key ──
     if getattr(cfg, "search_fasta", None):
         P.sage = search_dda(P, P.raw, search_fasta=cfg.search_fasta)
@@ -1749,6 +1802,7 @@ def timsim_sciex_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
         intensity_scale=cfg.intensity_scale,
         frag_model=cfg.frag_model,
     )
+    P.signed = do_sign(cfg, sample_id, P, P.mzml, P.truth, "mzml", "timsim-render-sciex")
     # ── phase 2 (opt-in): DiaNN-search the mzML natively + score against the answer key ──
     if getattr(cfg, "search_fasta", None):
         P.diann = search_sciex(P, 
@@ -1808,6 +1862,12 @@ def _parser() -> argparse.ArgumentParser:
                     help="cap the simulated peptides to this many (seeded sample; 0 = full analytic digest). "
                          "Keeps the full FASTA as the DiaNN search space — for a tractable run on a big proteome.")
     ap.add_argument("--dry-run", action="store_true")
+    # mzprov signing (on by default, as in v1): a leaf node beside each render; never alters the render.
+    ap.add_argument("--no-sign", dest="sign", action="store_false",
+                    help="do not sign rendered runs with mzprov (v1: emit_provenance = false)")
+    ap.add_argument("--sign-key", default=None,
+                    help="mzprov signing key or its directory (default: mzprov's own, "
+                         "~/.config/mzprov/keys; v1: provenance_key_path)")
     ap.add_argument("--graph", help="write the DAG to this file")
     ap.add_argument("--thermo-template", help="build the Thermo .raw pipeline against this template")
     ap.add_argument("--bruker-reference", help="build the LEAN v2 Bruker .d pipeline (timsim-render) against "
@@ -1934,6 +1994,8 @@ def build_cfg(a) -> SimpleNamespace:
         run_intensity_cv=getattr(a, "run_intensity_cv", 0.0),
         target_p=getattr(a, "target_p", 0.0),
         noise_frag_ppm=a.noise_frag_ppm,
+        sign=getattr(a, "sign", True),
+        sign_key=getattr(a, "sign_key", None),
         noise_mz_uniform=a.noise_mz_uniform,
         noise_seed=a.noise_seed,
         noise_real_data=a.noise_real_data,
@@ -2073,6 +2135,9 @@ def main() -> None:
         # Phase 2 (opt-in): the score is the terminal deliverable — requesting it pulls search + the .raw.
         if getattr(P, "score", None) is not None:
             req.append(P.score)
+        # The mzprov signature is a deliverable too, unless --no-sign.
+        if getattr(P, "signed", None) is not None:
+            req.append(P.signed)
         dag.require(req)
         n_across += len(P.nodes)
 
