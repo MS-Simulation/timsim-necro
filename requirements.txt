@@ -9,11 +9,11 @@ necroflow @ git+https://github.com/MatteoLacki/necroflow@895e3d8d845c781e052548b
 # Pulls pepdl -> mscorepy (mscore+ms-chem pyo3 primitives). Fully imspy-free.
 #   [local]  = torch + Chronologer (default RT) + the local intensity model (on-device)
 #   [koina]  = koinapy (remote prediction, torch-free)
-timsim-predict[local,koina] @ git+https://github.com/theGreatHerrLebert/timsim-predict
+timsim-predict[local,koina] @ git+https://github.com/MS-Simulation/timsim-predict
 #
 # Evaluation / validation harness (the SCORE node): parse the DiaNN report, compare to the render's
 # ground-truth manifest, emit metrics. Pure-Python (pandas/numpy/scipy/matplotlib), imspy-free.
-timsim-eval @ git+https://github.com/theGreatHerrLebert/timsim-eval
+timsim-eval @ git+https://github.com/MS-Simulation/timsim-eval
 #
 # Provenance: the flow's `sign` node signs each render with mzprov (Ed25519, sidecar beside a link to
 # the output; see flow/sign_output.py). Off with --no-sign.

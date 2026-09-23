@@ -30,9 +30,9 @@ necroflow (typed DAG framework)                         ← orchestration
 ```
 
 **No rustims, no imspy monorepo — everything is ingested from small federated repos.** The prediction step — the one that used to pull the heaviest dead weight — is now
-[`timsim-predict`](https://github.com/theGreatHerrLebert/timsim-predict) →
-[`pepdl`](https://github.com/theGreatHerrLebert/pepdl) →
-[`mscorepy`](https://github.com/theGreatHerrLebert/mscore), with **zero imspy** in its closure. CCS reproduces
+[`timsim-predict`](https://github.com/MS-Simulation/timsim-predict) →
+[`pepdl`](https://github.com/MS-Simulation/pepdl) →
+[`mscorepy`](https://github.com/MS-Simulation/mscore), with **zero imspy** in its closure. CCS reproduces
 the old output byte-for-byte (40,509 precursors, 0 diff); RT is Chronologer (Searle Lab); fragments are Prosit/
 local. Torch is optional (`[koina]` runs remote, torch-free; `[local]` adds torch + Chronologer + the on-device
 intensity model).
@@ -100,10 +100,10 @@ enforceable alternative.
   validated end-to-end (CCS exact parity, RT Chronologer, fragments local).
 - **Orchestration** — `necroflow` (git), imports nothing from this project's internals.
 
-- **Rust protocol/render tools** — [`timsim-cli`](https://github.com/theGreatHerrLebert/timsim-cli), its own
+- **Rust protocol/render tools** — [`timsim-cli`](https://github.com/MS-Simulation/timsim-cli), its own
   repo, `cargo install --git`-able, depending only on published crates. **No rustims.**
 
-- **Eval / validation** — [`timsim-eval`](https://github.com/theGreatHerrLebert/timsim-eval), its own repo.
+- **Eval / validation** — [`timsim-eval`](https://github.com/MS-Simulation/timsim-eval), its own repo.
   The SCORE node (`timsim_eval.v2_thermo_eval`) parses the DiaNN report and compares it to the render's
   ground-truth manifest. Pure-Python, **imspy-free** on the DiaNN path — the last imspy touchpoint is cut.
 
