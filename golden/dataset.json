@@ -1,6 +1,6 @@
 {
-  "frozen_at": "2026-07-23T13:51:27",
-  "render_commit": "1097a59",
+  "frozen_at": "2026-09-23T14:11:18",
+  "render_commit": "3ed3e99",
   "instruments": {
     "thermo": {
       "render": "/scratch/timsim-demo/golden-dataset/thermo/data.raw",
@@ -8,8 +8,8 @@
       "truth": "/scratch/timsim-demo/golden-dataset/thermo/truth.parquet",
       "peptides": "/scratch/timsim-demo/golden-dataset/thermo/peptides.parquet",
       "fasta": "/scratch/timsim-demo/timsim-necro-repo/golden/config/tiny.fasta",
-      "truth_sha": "0a7abd4baacff453",
-      "peptides_sha": "f6c85b39f0cfadaf"
+      "truth_sha": "dc4006ca7c689cfc",
+      "peptides_sha": "b7d87a5de3109046"
     },
     "bruker": {
       "render": "/scratch/timsim-demo/golden-dataset/bruker/data.d",
@@ -17,8 +17,17 @@
       "truth": "/scratch/timsim-demo/golden-dataset/bruker/truth.parquet",
       "peptides": "/scratch/timsim-demo/golden-dataset/bruker/peptides.parquet",
       "fasta": "/scratch/timsim-demo/timsim-necro-repo/golden/config/tiny.fasta",
-      "truth_sha": "3864a210c6815eb6",
-      "peptides_sha": "f6c85b39f0cfadaf"
+      "truth_sha": "6eb1cbf595289f8f",
+      "peptides_sha": "b7d87a5de3109046"
+    },
+    "sciex": {
+      "render": "/scratch/timsim-demo/golden-dataset/sciex/sciex.mzML",
+      "is_dir": false,
+      "truth": "/scratch/timsim-demo/golden-dataset/sciex/truth.parquet",
+      "peptides": "/scratch/timsim-demo/golden-dataset/sciex/peptides.parquet",
+      "fasta": "/scratch/timsim-demo/timsim-necro-repo/golden/config/tiny.fasta",
+      "truth_sha": "dde6642a4229daed",
+      "peptides_sha": "b7d87a5de3109046"
     }
   }
 }

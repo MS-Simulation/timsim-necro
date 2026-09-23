@@ -57,7 +57,7 @@ dev-box-specific. Goal: pick ONE real anchor per instrument + the proteome, so t
 3. **Gradient**: pick ONE and match across the fixture where the anchors allow (~60 min if we want the big
    real templates; ~41 min if we anchor Bruker to G8027).
 4. **SCIEX — writers DONE, lean wiring is the gap** (corrected): the native `.wiff` writer EXISTS and is
-   validated — `sciexwiff` (github.com/theGreatHerrLebert/sciexwiff, `feature/wiffscan-codec`): pure-Rust
+   validated — `sciexwiff` (github.com/MS-Simulation/sciexwiff, `feature/wiffscan-codec`): pure-Rust
    `.wiff.scan` encode + GROW rebuild; native render = 241 prec / 217 prot = 84% of the mzML baseline
    (287/261); pwiz-validated; per-template profile for generalization. Plus `timsim-core/mzml.rs`
    (`render_db_to_mzml`) for open mzML. BUT both are wired to the **v1 world** — `render_db_to_mzml` reads a
