@@ -14,20 +14,22 @@ sim-axis number **exactly** (Δ 0.00 pp) — a clean slice, and a correctness ch
 
 ## Sim axis — is the simulation getting more realistic?
 
-The same 60-protein experiment through **both** measurement paths, each closing structure → render →
+The same 60-protein experiment through **all three** measurement paths, each closing structure → render →
 search → score:
 
 - **Thermo `.raw` DIA** — `render_thermo` → DiaNN (native via .NET) → `timsim_eval` score
 - **Bruker `.d` DIA** — the lean `timsim-render` → DiaNN (native, no .NET) → the same score
+- **SCIEX SWATH mzML** — `timsim-render-sciex` onto a synthesised SWATH schedule (no template) → DiaNN
+  (native open mzML, no .NET) → the same score
 
-The DAG is content-addressed, so within a run the two loops **share their whole feature space** (digest →
+The DAG is content-addressed, so within a run the three loops **share their whole feature space** (digest →
 … → spectra) — computed once; only ccs (Bruker) + render + search + score differ. But content-addressing
 keys on inputs/config/command, **not the binary**, so a rebuilt render binary at the same path would be a
 cache hit. To read *current* code the sim axis **wipes the work dir each run** (use `--no-clean` only when
 iterating and you don't need a true reading).
 
 ```bash
-./run.sh                       # both loops, diff baseline.sim_axis, append history.jsonl
+./run.sh                       # all three loops, diff baseline.sim_axis, append history.jsonl
 ./run.sh --only bruker         # one instrument (e.g. tuning the Bruker render)
 ./run.sh --update-baseline     # rerun and REWRITE baseline.sim_axis — deliberately, and say so in the commit
 ```
@@ -67,7 +69,7 @@ config/                 the FROZEN small inputs — version-pinned so the baseli
   tiny_design.toml        single-organism, 50 proteins expressed
 gate.py                 the harness: sim axis + freeze + tool axis; parse metrics, diff baseline, log
 run.sh                  env wrapper (venv + TIMSIM_BIN + DiaNN/.NET), then gate.py
-baseline.json           pinned reference: {sim_axis:{thermo,bruker}, tool_axis:{inst:{tool}}}
+baseline.json           pinned reference: {sim_axis:{thermo,bruker,sciex}, tool_axis:{inst:{tool}}}
 dataset.json            manifest of the frozen tool-axis dataset (paths + content hashes)
 history.jsonl           append-only run log (gitignored — per-machine telemetry)
 ```

@@ -2,7 +2,7 @@
 # Golden-run regression gate — env wrapper around gate.py.
 #
 # Sets the lean toolchain (Rust render bins on TIMSIM_BIN; the imspy-free NECRO venv that carries
-# necroflow + timsim-predict + timsim-eval + DiaNN reachability) then runs both closed loops and diffs
+# necroflow + timsim-predict + timsim-eval + DiaNN reachability) then runs the three closed loops and diffs
 # the pinned baseline. Override any path via the env vars below; defaults suit the dev box.
 set -euo pipefail
 
