@@ -14,3 +14,7 @@ timsim-predict[local,koina] @ git+https://github.com/theGreatHerrLebert/timsim-p
 # Evaluation / validation harness (the SCORE node): parse the DiaNN report, compare to the render's
 # ground-truth manifest, emit metrics. Pure-Python (pandas/numpy/scipy/matplotlib), imspy-free.
 timsim-eval @ git+https://github.com/theGreatHerrLebert/timsim-eval
+#
+# Provenance: the flow's `sign` node signs each render with mzprov (Ed25519, sidecar beside a link to
+# the output; see flow/sign_output.py). Off with --no-sign.
+mzprov>=0.1.2

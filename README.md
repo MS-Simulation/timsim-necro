@@ -164,6 +164,20 @@ ground-truth signal *additively* onto a **real** experimental `.d`, which also s
 geometry. Only the spikes are labelled; the real run's own identifications are removed from FDP through
 the same control render.
 
+## Provenance: every render is signed
+
+As in timsim v1, each rendered run is signed with [mzprov](https://github.com/mzprov/mzprov), declaring
+it TimSim-simulated. The signature lives in its own `sign` node, next to a link to the render's
+output, so the render itself is never modified and its cache entry stays valid:
+
+```bash
+mzprov verify <outdir>/sign/<hash>/data.d      # or data.raw / data.mzML
+```
+
+The signed configuration (`render_config.json`) is the run's full config plus the answer key's
+SHA-256; the renderer is identified by binary name and content hash. `--no-sign` turns signing off;
+`--sign-key` picks the key (default: mzprov's own, `~/.config/mzprov/keys`).
+
 ## Benchmarks built on top
 
 - **HYE quant** (`--quant`; design: `HYE_QUANT.md`) — a Human/Yeast/E. coli mixture at two known

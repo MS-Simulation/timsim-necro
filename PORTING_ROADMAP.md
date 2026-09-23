@@ -59,8 +59,10 @@ matched the timsTOF core AND gone beyond it:
 - **`from_existing`** — replay a prior `synthetic_data.db`. **Superseded** by the content-addressed DAG
   (re-request = cache hit; change a knob = targeted re-sim). No need.
 - **`from_findings`** — drive the sim from real search results. Niche; not a simulation-fidelity concern.
-- **Provenance / mzPROV** (Ed25519 signing embedded in the `.d`) — defer indefinitely; orthogonal to
-  fidelity, adds a crypto dep.
+- **Provenance / mzPROV** — ported, but not into the renderer. The flow signs each render with the
+  Python `mzprov` package in a separate leaf node (`sign`, `flow/sign_output.py`), writing a sidecar
+  beside a link to the output. The Rust stack gains no crypto dependency, and the render's bytes and
+  fingerprint are unchanged. On by default as in v1; `--no-sign` turns it off.
 - **Preview video generation** — pure cosmetic. Drop.
 - **Waters** — investigated 2026-07-28; decided **not to build**. The blocker is validation, not effort, so
   do not reopen this on cost grounds.
