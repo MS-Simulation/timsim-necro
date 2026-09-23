@@ -33,7 +33,7 @@ import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
-from necroflow import DAG, NodeType, Pipeline, command, output, resolve_command
+from necroflow import DAG, NodeType, Pipeline, command, output
 
 
 # ── invalidation: a spec FILE is a dependency, not a string ──────────────────
@@ -2011,6 +2011,11 @@ def job(P: Pipeline, config: dict) -> None:
     build(P, build_cfg(a), sample)
 
 
+def _calls(dag):
+    """Each rule call once, in DAG order (a call with several outputs owns several nodes)."""
+    return list({id(n.rule_call): n.rule_call for n in dag.nodes}.values())
+
+
 def main() -> None:
     ap = _parser()
     a = ap.parse_args()
@@ -2051,12 +2056,12 @@ def main() -> None:
             print(f"  -> {a.graph}")
         if a.dry_run:
             print("\n  resolved commands:")
-            for node in dag.nodes:
-                cmd = resolve_command(node)
+            for call in _calls(dag):
+                cmd = call.resolve()
                 if cmd:
                     print(f"    {cmd}")
             return
-        dag.execute()
+        dag.run()
         return
     n_across = 0
     for sid in a.samples:
@@ -2092,13 +2097,13 @@ def main() -> None:
     if a.dry_run:
         print()
         print("  resolved commands:")
-        for node in dag.nodes:
-            cmd = resolve_command(node)
+        for call in _calls(dag):
+            cmd = call.resolve()
             if cmd:
                 print(f"    {cmd}")
         return
 
-    dag.execute()
+    dag.run()
 
 
 if __name__ == "__main__":
