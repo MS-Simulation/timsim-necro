@@ -7,20 +7,20 @@ two different things, so the gate has two modes:
   SIM AXIS  (default)   fix the tool (DiaNN), vary the render/predictors/schema  → simulation realism
   TOOL AXIS (--tool-axis)  fix a FROZEN rendered dataset, vary the search engine → tool regression + benchmark
 
-Sim axis reruns the whole pipeline end to end (both Thermo `.raw` and Bruker `.d` DIA loops), from a CLEAN
+Sim axis reruns the whole pipeline end to end (Thermo `.raw`, Bruker `.d` and SCIEX SWATH mzML DIA loops), from a CLEAN
 work dir — necroflow content-addresses on inputs/config/command, not the binary, so only a clean run
-reflects current render/predictor code. The two loops still share their feature space within that run.
+reflects current render/predictor code. The loops still share their feature space within that run.
 
 Tool axis runs only search→score against a dataset you froze with `--freeze` (a render you trust), so it
 is cheap (~40s, no re-simulation) and isolates the SOFTWARE: DiaNN-vs-Sage-vs-FragPipe, or your own
 tool's version bump, on identical ground truth.
 
 Usage (via run.sh, which sets venv + tool paths):
-    python gate.py                       # sim axis: both loops, diff baseline.sim_axis, log history
+    python gate.py                       # sim axis: all three loops, diff baseline.sim_axis, log history
     python gate.py --only bruker         # sim axis, one instrument
     python gate.py --update-baseline     # rerun and REWRITE the relevant baseline section
     python gate.py --freeze              # snapshot the current renders as the frozen tool-axis dataset
-    python gate.py --tool-axis --tool diann          # tool axis on the frozen dataset (both instruments)
+    python gate.py --tool-axis --tool diann          # tool axis on the frozen dataset (every instrument)
     python gate.py --tool-axis --tool diann --only bruker
 
 Env (defaults suit the dev box):
@@ -65,7 +65,14 @@ DIANN_ARGS = [
     "--min-pep-len", "7", "--max-pep-len", "30", "--var-mods", "1", "--unimod35",
 ]
 QVALUE = 0.01
-LABEL = {"thermo": "Thermo DIA", "bruker": "Bruker DIA"}
+LABEL = {"thermo": "Thermo DIA", "bruker": "Bruker DIA", "sciex": "SCIEX DIA"}
+INSTRUMENTS = list(LABEL)
+# SCIEX needs no template: the flow synthesises the SWATH schedule (flow defaults: 1800 s gradient,
+# 3 s cycle, 25 Th windows over 400-1200 m/z).
+MEASUREMENT = {"thermo": lambda: ["--thermo-template", THERMO_TEMPLATE],
+               "bruker": lambda: ["--bruker-reference", BRUKER_REF],
+               "sciex": lambda: ["--sciex"]}
+SCORE_DIR = {"thermo": "score", "bruker": "score_bruker", "sciex": "score_sciex"}
 
 
 # ── shared helpers ────────────────────────────────────────────────────────────
@@ -150,9 +157,8 @@ def log_history(kind: str, results: dict) -> str:
 # ── SIM AXIS: vary the render, fix DiaNN ──────────────────────────────────────
 
 def run_pipeline(kind: str, spec: Path) -> dict:
-    measurement = (["--thermo-template", THERMO_TEMPLATE] if kind == "thermo"
-                   else ["--bruker-reference", BRUKER_REF])
-    score_dir = "score" if kind == "thermo" else "score_bruker"
+    measurement = MEASUREMENT[kind]()
+    score_dir = SCORE_DIR[kind]
     cmd = [sys.executable, str(FLOW), "--outdir", str(WORKDIR),
            "--proteome-spec", str(spec), "--mods", str(CONFIG / "mods_basic.toml"),
            "--design-spec", str(CONFIG / "tiny_design.toml"), *measurement,
@@ -205,6 +211,8 @@ def freeze() -> None:
                    glob.glob(str(WORKDIR / "render_thermo" / "*" / "truth.parquet")), False),
         "bruker": (glob.glob(str(WORKDIR / "render" / "*" / "data.d")),
                    glob.glob(str(WORKDIR / "render" / "*" / "truth.parquet")), True),
+        "sciex": (glob.glob(str(WORKDIR / "render_sciex" / "*" / "sciex.mzML")),
+                  glob.glob(str(WORKDIR / "render_sciex" / "*" / "truth.parquet")), False),
     }
     manifest = {"frozen_at": datetime.datetime.now().isoformat(timespec="seconds"),
                 "render_commit": git_commit(), "instruments": {}}
@@ -234,10 +242,10 @@ def freeze() -> None:
 # ── TOOL AXIS: fix the frozen dataset, vary the search engine ─────────────────
 
 def run_diann(inst: str, ds: dict, outdir: Path) -> Path:
-    """DiaNN library-free on the frozen render. Bruker `.d` is native; a Thermo `.raw` needs .NET."""
+    """DiaNN library-free on the frozen render. Bruker `.d` and SCIEX mzML are native; a Thermo `.raw` needs .NET."""
     outdir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
-    if not ds["is_dir"]:  # Thermo .raw → .NET runtime
+    if inst == "thermo":  # Thermo .raw → .NET runtime
         env["DOTNET_ROOT"] = DOTNET
         env["PATH"] = f"{DOTNET}:{env['PATH']}"
     cmd = [DIANN, "--f", ds["render"], "--fasta", ds["fasta"],
@@ -296,7 +304,7 @@ def tool_axis(tool: str, insts: list[str], update: bool) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--only", choices=["thermo", "bruker"], help="one instrument")
+    ap.add_argument("--only", choices=INSTRUMENTS, help="one instrument")
     ap.add_argument("--update-baseline", action="store_true", help="rewrite the relevant baseline section")
     ap.add_argument("--freeze", action="store_true", help="snapshot current renders as the tool-axis dataset")
     ap.add_argument("--tool-axis", action="store_true", help="run the tool axis on the frozen dataset")
@@ -304,7 +312,7 @@ def main() -> None:
     ap.add_argument("--no-clean", action="store_true", help="sim axis: reuse the work dir (faster; NOT a true reading)")
     a = ap.parse_args()
 
-    insts = [a.only] if a.only else ["thermo", "bruker"]
+    insts = [a.only] if a.only else INSTRUMENTS
     if a.freeze:
         freeze()
     elif a.tool_axis:
