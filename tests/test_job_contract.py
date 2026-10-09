@@ -47,9 +47,19 @@ def test_values_are_type_checked(tmp_path, key, value, why):
         commands(base(**{key: value}), tmp_path)
 
 
+@needs_ref
 def test_toml_integer_for_float_option_is_accepted(tmp_path):
-    # TOML `noise_mz_ppm = 6` is an int; the CLI would have produced 6.0. Same command either way.
-    assert commands(base(noise_mz_ppm=6), tmp_path) == commands(base(noise_mz_ppm=6.0), tmp_path)
+    # TOML `noise_mz_ppm = 6` is an int; the CLI would have produced 6.0. On the Bruker path, where the
+    # value reaches the render command, both must resolve to `--noise-mz-ppm 6.0`.
+    as_int = commands(base(bruker_reference=REF, noise_mz_ppm=6), tmp_path)
+    assert as_int == commands(base(bruker_reference=REF, noise_mz_ppm=6.0), tmp_path)
+    assert any("--noise-mz-ppm 6.0" in c for c in as_int if "timsim-render" in c)
+
+
+@pytest.mark.parametrize("key,value", [("mods", None), ("samples", [None]), ("samples", [["A_R1"]])])
+def test_null_and_nested_values_are_refused(tmp_path, key, value):
+    with pytest.raises(SystemExit, match="null is not allowed|not a list"):
+        commands(base(**{key: value}), tmp_path)
 
 
 def test_several_samples_without_sample_is_refused(tmp_path):
@@ -77,11 +87,10 @@ def test_quant_job_builds_the_joint_pipeline(tmp_path):
     assert any("v2_quant_eval" in c for c in cmds), "no fold-change evaluation"
 
 
-@needs_ref
 def test_quant_job_refuses_reversed_conditions(tmp_path):
+    # Needs no reference: the condition check runs before anything is built.
     cfg = dict(quant=True, proteome_spec=str(CONF / "hye.toml"), design_spec=str(CONF / "design.toml"),
-               samples=["B_R1", "A_R1"], max_peptides=5000, mods=str(CONF / "mods_basic.toml"),
-               bruker_reference=REF, search_fasta=str(CONF / "hela_subset.fasta"))
+               samples=["B_R1", "A_R1"], max_peptides=5000, mods=str(CONF / "mods_basic.toml"))
     with pytest.raises(SystemExit, match="FIRST sample must be the design reference"):
         commands(cfg, tmp_path)
 
@@ -99,3 +108,57 @@ def test_shipped_example_job_still_loads(tmp_path):
     for k in ("proteome_spec", "mods", "design_spec", "search_fasta"):  # relative to configs/ in the example
         cfg[k] = str(CONF / cfg[k])
     assert any("timsim-render" in c for c in commands(cfg, tmp_path))
+
+
+# ── job ≡ CLI: the same experiment written as a job and as a command line resolves to the same commands ──
+# Compared with fingerprint directories masked. necroflow folds each output's type name, module included,
+# into the fingerprint (rule_call.py), and the CLI defines the types in `__main__` while job() (and
+# necroflow's own job runner, which names the module after the file) defines them in `timsim_flow`. So the
+# two never share cache entries even for identical commands — a known, separate issue. What is compared
+# here is what actually runs: every tool, flag and value.
+import re  # noqa: E402
+
+_FP = re.compile(r"/([a-z0-9_]+)/[0-9a-f]{64}/")
+
+
+def masked(cmds):
+    return sorted(_FP.sub(r"/\1/<fp>/", c) for c in cmds)
+
+def cli_commands(argv, tmp_path):
+    import subprocess
+    out = subprocess.run([sys.executable, str(FLOW / "timsim_flow.py"), "--outdir", str(tmp_path), *argv,
+                          "--dry-run"], capture_output=True, text=True, check=True, cwd=FLOW).stdout
+    return sorted(l.strip() for l in out.split("resolved commands:", 1)[1].splitlines() if l.strip())
+
+
+def as_argv(cfg):
+    argv = []
+    for k, v in cfg.items():
+        flag = "--" + k.replace("_", "-")
+        if v is True:
+            argv.append(flag)
+        elif isinstance(v, list):
+            argv += [flag, *map(str, v)]
+        elif v is not False:
+            argv += [flag, str(v)]
+    return argv
+
+
+@needs_ref
+@pytest.mark.parametrize("extra", [
+    dict(noise_mz_ppm=6.5, noise_frag_ppm=6.5, noise_real_data=True, gradient_s=3600),
+    dict(phospho=True, mods=str(CONF / "mods_phospho_reg.toml")),
+])
+def test_job_and_cli_resolve_the_same_bruker_commands(tmp_path, extra):
+    cfg = base(bruker_reference=REF, search_fasta=str(CONF / "hela_subset.fasta"), **extra)
+    sample = cfg.pop("sample")
+    job_cmds = masked(commands(dict(cfg, sample=sample), tmp_path))
+    assert job_cmds == masked(cli_commands(as_argv(dict(cfg, samples=[sample])), tmp_path))
+
+
+@needs_ref
+def test_job_and_cli_resolve_the_same_quant_commands(tmp_path):
+    cfg = dict(quant=True, proteome_spec=str(CONF / "hye.toml"), design_spec=str(CONF / "design.toml"),
+               samples=["A_R1", "B_R1"], max_peptides=5000, mods=str(CONF / "mods_basic.toml"),
+               bruker_reference=REF, search_fasta=str(CONF / "hela_subset.fasta"))
+    assert masked(commands(cfg, tmp_path)) == masked(cli_commands(as_argv(cfg), tmp_path))

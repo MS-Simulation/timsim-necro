@@ -2136,11 +2136,25 @@ def _coerce(ap: argparse.ArgumentParser, key: str, value):
         raise SystemExit(f"unknown config key {key!r}")
     def bad(why):
         raise SystemExit(f"config key {key!r}: {why} (got {value!r})")
+    if value is None:
+        # TOML has no null, but a dict from a GUI/MCP caller can. None only means "unset" for an option
+        # whose own default is None; anywhere else it would reach build_cfg as a wrong-typed value.
+        if act.default is None:
+            return None
+        bad("null is not allowed here")
+    supported = (argparse._StoreAction, argparse._StoreTrueAction, argparse._StoreFalseAction)
+    if type(act) not in supported or (type(act) is argparse._StoreAction and act.nargs not in (None, "+", "*", "?")):
+        # Refuse rather than half-handle an argparse action kind this checker was not written for.
+        bad(f"option kind {type(act).__name__} (nargs={act.nargs!r}) is not supported in job configs")
     if isinstance(act, (argparse._StoreTrueAction, argparse._StoreFalseAction)):
         if not isinstance(value, bool):
             bad("expected true/false")
         return value
     def one(v):
+        if v is None:
+            bad("null is not allowed here")
+        if isinstance(v, (list, dict)):
+            bad("expected a single value, not a list/table")
         if act.type is not None:
             if isinstance(v, bool) and act.type is not bool:
                 bad(f"expected {getattr(act.type, '__name__', act.type)}, not a boolean")
