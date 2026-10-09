@@ -1895,6 +1895,9 @@ def _parser() -> argparse.ArgumentParser:
                          "re-fingerprints precursors and everything downstream, including the "
                          "fragment predictions.")
     ap.add_argument("--samples", nargs="+", default=["A_R1", "B_R1"])
+    ap.add_argument("--seed", type=int, default=41,
+                    help="seed for the stochastic structure stages (proteome sampling, digest, precursors); "
+                         "41 is the historical value, so the default keeps existing fingerprints")
     ap.add_argument("--max-peptides", type=int, default=0,
                     help="cap the simulated peptides to this many (seeded sample; 0 = full analytic digest). "
                          "Keeps the full FASTA as the DiaNN search space — for a tractable run on a big proteome.")
@@ -2009,7 +2012,7 @@ def build_cfg(a) -> SimpleNamespace:
         design_spec=a.design_spec,
         digestion_efficiency=0.9,
         timsim_config=a.timsim_config,
-        seed=41,
+        seed=a.seed,
         template=a.thermo_template,
         frag_model=a.frag_model,
         collision_energy=a.collision_energy,
@@ -2096,6 +2099,71 @@ def select_build(a, ap: argparse.ArgumentParser | None = None):
     return timsim_pipeline
 
 
+def _validate_quant(a, fail) -> None:
+    """HYE quant is ONE cross-sample pipeline (two renders → joint search → fold-change), not a per-sample
+    loop. Require exactly two samples resolving to the two DESIGN conditions, with the design's reference
+    condition FIRST (it becomes DiaNN run 0 = A, the fold-change denominator). This guards the
+    reversed-samples / two-replicates-of-one-condition mistakes the scorer can't detect. Shared by the CLI
+    and the job-TOML entry point, so both refuse the same experiments."""
+    if len(a.samples) != 2:
+        fail(f"--quant needs exactly 2 samples (the two conditions), got {a.samples}")
+    import tomllib
+    _design = tomllib.load(open(a.design_spec, "rb"))
+    _conds = [c["name"] for c in _design["condition"]]
+    _ref = _design.get("design", {}).get("reference", _conds[0])
+    if len(_conds) != 2:
+        fail(f"--quant needs a 2-condition design; {a.design_spec} has conditions {_conds}")
+
+    def _cond_of(sid):
+        m = [c for c in _conds if sid == c or sid.startswith(c + "_")]
+        return m[0] if len(m) == 1 else None
+    _sc = [_cond_of(s) for s in a.samples]
+    if None in _sc or set(_sc) != set(_conds):
+        fail(f"--quant samples {a.samples} must map 1:1 to the two design conditions {_conds} "
+            f"(got {_sc}); name them e.g. {_conds[0]}_R1 {_conds[1]}_R1")
+    if _sc[0] != _ref:
+        fail(f"--quant: the FIRST sample must be the design reference condition {_ref!r} "
+            f"(the fold-change denominator); got {a.samples[0]} → {_sc[0]!r}. Reorder --samples.")
+
+
+def _coerce(ap: argparse.ArgumentParser, key: str, value):
+    """Give a job-TOML value the type the CLI would have given it, or refuse it. TOML already has real
+    booleans, numbers and arrays, so this checks rather than parses strings: a flag must get a bool, a
+    list option a list, a numeric option a TOML number (not a quoted one, and not a bool, although Python
+    would accept both), other typed options a value their `type` accepts, and `choices` are enforced."""
+    act = next((x for x in ap._actions if x.dest == key), None)
+    if act is None:
+        raise SystemExit(f"unknown config key {key!r}")
+    def bad(why):
+        raise SystemExit(f"config key {key!r}: {why} (got {value!r})")
+    if isinstance(act, (argparse._StoreTrueAction, argparse._StoreFalseAction)):
+        if not isinstance(value, bool):
+            bad("expected true/false")
+        return value
+    def one(v):
+        if act.type is not None:
+            if isinstance(v, bool) and act.type is not bool:
+                bad(f"expected {getattr(act.type, '__name__', act.type)}, not a boolean")
+            if act.type in (int, float) and isinstance(v, str):
+                bad(f"expected a TOML number, not a string")
+            if act.type is int and isinstance(v, float) and not v.is_integer():
+                bad("expected an integer")
+            try:
+                v = act.type(v)
+            except (TypeError, ValueError) as e:
+                bad(str(e))
+        elif not isinstance(v, str) and v is not None:
+            bad("expected a string")
+        if act.choices is not None and v not in act.choices:
+            bad(f"expected one of {sorted(act.choices)}")
+        return v
+    if act.nargs in ("+", "*"):
+        if not isinstance(value, list) or (act.nargs == "+" and not value):
+            bad("expected a non-empty list" if act.nargs == "+" else "expected a list")
+        return [one(v) for v in value]
+    return one(value)
+
+
 def job(P: Pipeline, config: dict) -> None:
     """necroflow **job-TOML entry point** — the config-file face of this flow, and the target any GUI
     should build against::
@@ -2111,16 +2179,37 @@ def job(P: Pipeline, config: dict) -> None:
     given keeps its CLI default, so a TOML run and a command line run are the same run. `sample` picks the
     design sample (default: the first of `samples`). Unknown keys are rejected rather than silently ignored
     — a typo'd knob would otherwise produce a plausible-looking run of the wrong experiment."""
-    a = _parser().parse_args([])
+    ap = _parser()
+    a = ap.parse_args([])
     unknown = [k for k in config if k not in vars(a) and k != "sample"]
     if unknown:
         raise SystemExit(f"unknown config key(s) {unknown}; valid keys: {sorted(vars(a))}")
     for k, v in config.items():
         if k != "sample":
-            setattr(a, k, v)
+            setattr(a, k, _coerce(ap, k, v))
+    def fail(msg):
+        raise SystemExit(f"error: {msg}")
     build = select_build(a)
-    sample = config.get("sample", a.samples[0])
-    build(P, build_cfg(a), sample)
+    cfg = build_cfg(a)
+    if a.quant:
+        # The same joint two-sample pipeline the CLI builds — not a per-sample run of one condition.
+        if "sample" in config:
+            fail("a quant job runs both design conditions; drop `sample` and set `samples`")
+        _validate_quant(a, fail)
+        timsim_hye_quant_pipeline(P, cfg, a.samples)
+        return
+    if "sample" in config:
+        sample = config["sample"]
+        if not isinstance(sample, str):
+            fail(f"`sample` must be a string (got {sample!r})")
+    elif len(a.samples) == 1:
+        sample = a.samples[0]
+    else:
+        # One job = one sample's pipeline (necroflow requests outputs on this P). Taking the first of
+        # several silently would run a different experiment from the one written down.
+        fail(f"`samples` lists {a.samples}; a job runs one sample — set `sample` (or `quant = true` "
+             f"for the two-condition HYE pipeline)")
+    build(P, cfg, sample)
 
 
 def _calls(dag):
@@ -2139,25 +2228,7 @@ def main() -> None:
         # loop. Require exactly two samples resolving to the two DESIGN conditions, with the design's
         # reference condition FIRST (it becomes DiaNN run 0 = A, the fold-change denominator). This guards
         # the reversed-samples / two-replicates-of-one-condition mistakes the scorer can't detect.
-        if len(a.samples) != 2:
-            ap.error(f"--quant needs exactly 2 samples (the two conditions), got {a.samples}")
-        import tomllib
-        _design = tomllib.load(open(a.design_spec, "rb"))
-        _conds = [c["name"] for c in _design["condition"]]
-        _ref = _design.get("design", {}).get("reference", _conds[0])
-        if len(_conds) != 2:
-            ap.error(f"--quant needs a 2-condition design; {a.design_spec} has conditions {_conds}")
-
-        def _cond_of(sid):
-            m = [c for c in _conds if sid == c or sid.startswith(c + "_")]
-            return m[0] if len(m) == 1 else None
-        _sc = [_cond_of(s) for s in a.samples]
-        if None in _sc or set(_sc) != set(_conds):
-            ap.error(f"--quant samples {a.samples} must map 1:1 to the two design conditions {_conds} "
-                     f"(got {_sc}); name them e.g. {_conds[0]}_R1 {_conds[1]}_R1")
-        if _sc[0] != _ref:
-            ap.error(f"--quant: the FIRST sample must be the design reference condition {_ref!r} "
-                     f"(the fold-change denominator); got {a.samples[0]} → {_sc[0]!r}. Reorder --samples.")
+        _validate_quant(a, ap.error)
         P = Pipeline(dag)
         timsim_hye_quant_pipeline(P, cfg, a.samples)
         dag.require([P.quant])
