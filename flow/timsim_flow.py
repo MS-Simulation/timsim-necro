@@ -2125,8 +2125,11 @@ def select_build(a, ap: argparse.ArgumentParser | None = None):
                                           or not a.bruker_reference):
         fail("--gradient-s applies to the Bruker DIA render only (--bruker-reference, without --spike-into, "
              "whose frames must match the real run); SCIEX has --sciex-gradient-s, DDA is not wired yet")
-    if getattr(a, "peak_shape", "per-peptide") == "per-peptide-legacy" and (a.sciex or a.thermo_template):
-        fail("--peak-shape per-peptide-legacy is implemented by the Bruker render only (timsim-render)")
+    if getattr(a, "peak_shape", "per-peptide") != "per-peptide" and (a.sciex or a.thermo_template):
+        # The Thermo/SCIEX renders are not given --peak-shape (they keep their own default), so any other
+        # choice would be silently ignored there; per-peptide-legacy is not implemented by them at all.
+        fail("--peak-shape applies to the Bruker render only (timsim-render); the Thermo/SCIEX renders use "
+             "their own default shape")
     if a.sciex:
         return timsim_sciex_pipeline
     if a.thermo_template:
