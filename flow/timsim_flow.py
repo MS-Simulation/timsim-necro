@@ -553,8 +553,11 @@ def _bruker_n_frames(reference_d, gradient_s, cycle_seconds=0.0):
     keeps the frame count, which is what the renderer consumes, visible in the command string."""
     if not gradient_s:
         return 0
-    if gradient_s < 0:
-        raise SystemExit(f"error: --gradient-s must be >= 0 (got {gradient_s})")
+    import math
+    if not math.isfinite(gradient_s) or gradient_s < 0:
+        raise SystemExit(f"error: --gradient-s must be a finite number >= 0 (got {gradient_s})")
+    if cycle_seconds and not (math.isfinite(cycle_seconds) and cycle_seconds > 0):
+        raise SystemExit(f"error: --cycle-seconds must be a finite number > 0 (got {cycle_seconds})")
     period = cycle_seconds
     if not period:
         import sqlite3
