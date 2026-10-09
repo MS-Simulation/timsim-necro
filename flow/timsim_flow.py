@@ -544,6 +544,15 @@ def do_sign(cfg, sample_id, P, artifact, truth, kind, renderer):
     )
 
 
+def _bruker_floor(value) -> int:
+    """timsim-render (Bruker) takes the floor as a u32 — quantised intensity units — and rejects `0.0`.
+    The flow option is a float because the Thermo render's floor is one; refuse a fractional value here
+    rather than truncate it."""
+    if value < 0 or float(value) != int(value):
+        raise SystemExit(f"error: --min-peak-intensity for a Bruker render must be a whole number >= 0 (got {value})")
+    return int(value)
+
+
 def _legacy_rt_kwargs(cfg) -> dict:
     """The four parameters of v1's ORIGINAL RT peak model, for the Bruker renders."""
     return dict(legacy_rt_sigma_mean=cfg.legacy_rt_sigma_mean, legacy_rt_sigma_var=cfg.legacy_rt_sigma_var,
@@ -595,7 +604,8 @@ def do_render(cfg, sample_id, P, control=False):
                   ion_count_noise=str(cfg.ion_count_noise).lower(), instrument_cv=cfg.instrument_cv,
                   run_rt_sd=cfg.run_rt_sd, run_im_sd=cfg.run_im_sd,
                   run_intensity_cv=cfg.run_intensity_cv, target_p=cfg.target_p,
-                  n_frames=cfg.n_frames, **_legacy_rt_kwargs(cfg))
+                  n_frames=cfg.n_frames, min_peak_intensity=_bruker_floor(cfg.min_peak_intensity),
+                  **_legacy_rt_kwargs(cfg))
     if getattr(cfg, "spike_into", None):
         fn = render_spike_control if control else render_spike
         return fn(P, *inputs, spike_into=cfg.spike_into, **common)
@@ -923,6 +933,9 @@ _RENDER_HEAD = (
     # replays its DIA cycle (`dia.rs`) and samples A2 noise for every output frame, as v1 did when it
     # ran `gradient_length = 3600` on a 31-min blank. Set via `--gradient-s` (see `_bruker_n_frames`).
     "--n-frames {n_frames} "
+    # Reporting floor; 0 = inherit the reference `.d`'s own (timsim-render's default, handoff §1). 1 = v1's
+    # keep-every-non-zero-bin behaviour — the arm a v1-vs-v2 floor ablation needs.
+    "--min-peak-intensity {min_peak_intensity} "
     # v1's ORIGINAL RT peak model's parameters (timsim-cli `--peak-shape per-peptide-legacy`). Passed for
     # every shape — the binary ignores them for the others — so the command names the full config.
     "--legacy-rt-sigma-mean {legacy_rt_sigma_mean} --legacy-rt-sigma-var {legacy_rt_sigma_var} "
@@ -955,6 +968,7 @@ def render(
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
+    min_peak_intensity: int = 0,
 ):
     """MEASUREMENT (Bruker): the lean v2 projector places `ion_spectra` onto the reference `.d`'s DIA grid.
     A1 signal-m/z noise is always wired (`--noise-mz-ppm/-frag-ppm`; 0 = off, byte-identical). One node per
@@ -978,6 +992,7 @@ def render_a2(
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
+    min_peak_intensity: int = 0,
 ):
     """render + A2 real-data background sampled from the reference `.d` (the v1 DIA recipe with A1)."""
     raw = output(BrukerRawDataV2)
@@ -999,6 +1014,7 @@ def render_a2_control(
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
+    min_peak_intensity: int = 0,
 ):
     """A2 background-ONLY control (`--noise-only`): the real-data background alone, same seed — searched, its
     IDs subtracted from FDP (score_bruker_bg)."""
@@ -1019,6 +1035,7 @@ def render_spike(
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
+    min_peak_intensity: int = 0,
 ):
     """Spike-into-real: overlay the synthetic signal additively onto a real `.d` (`--spike-into`)."""
     raw = output(BrukerRawDataV2)
@@ -1038,6 +1055,7 @@ def render_spike_control(
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
+    min_peak_intensity: int = 0,
 ):
     """Spike background control (`--spike-into X --noise-only`): a re-encoded copy of X, no synthetic —
     searched, its IDs subtracted from FDP."""
@@ -1960,7 +1978,8 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--dda-max-precursors", type=int, default=25, help="DDA: max precursors per MS2 (PASEF) frame")
     ap.add_argument("--dda-exclusion-width", type=int, default=25, help="DDA: dynamic-exclusion window (frames)")
     ap.add_argument("--min-peak-intensity", type=float, default=0.0,
-                    help="Thermo MS1 reporting floor; 0 = inherit from the template. Supply "
+                    help="reporting floor; 0 = inherit (Thermo: the template's MS1 floor; Bruker DIA: the "
+                         "reference .d's floor), 1 = keep every non-zero bin (v1). Thermo: supply "
                          "explicitly (with --template-ms1-median, SAME domain) for a "
                          "pure-profile template, which exposes no centroids to inherit from.")
     ap.add_argument("--min-peak-intensity-ms2", type=float, default=0.0,

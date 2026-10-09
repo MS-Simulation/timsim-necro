@@ -196,3 +196,30 @@ def test_job_and_cli_agree_on_custom_legacy_values(tmp_path):
     sample = cfg.pop("sample")
     assert masked(commands(dict(cfg, sample=sample), tmp_path)) == \
         masked(cli_commands(as_argv(dict(cfg, samples=[sample])), tmp_path))
+
+
+@needs_ref
+def test_floor_reaches_the_bruker_renders(tmp_path):
+    for floor, want in ((0, "--min-peak-intensity 0 "), (1, "--min-peak-intensity 1 "), (21.0, "--min-peak-intensity 21 ")):
+        cfg = base(bruker_reference=REF, noise_real_data=True, search_fasta=str(CONF / "hela_subset.fasta"),
+                   min_peak_intensity=floor)
+        renders = [c for c in commands(cfg, tmp_path) if "/timsim-render --" in c]
+        assert len(renders) == 2 and all(want in c for c in renders), (floor, renders)
+    with pytest.raises(SystemExit, match="whole number"):
+        commands(base(bruker_reference=REF, min_peak_intensity=2.5), tmp_path)
+
+
+BIN = Path("/scratch/timsim-demo/timsim-cli/target/release/timsim-render")
+
+
+@pytest.mark.skipif(not BIN.exists(), reason="timsim-render binary not built here")
+def test_the_render_binary_parses_the_floor_spelling():
+    # The template's spelling must be one the binary's parser accepts — the bug this guards against
+    # (a float `0.0` for a u32 flag) resolved in a dry-run and failed only at render time.
+    import subprocess
+    for v in ("0", "1", "21"):
+        r = subprocess.run([str(BIN), "--min-peak-intensity", v, "--precursors", "/nonexistent"],
+                           capture_output=True, text=True)
+        assert "invalid" not in r.stderr.lower(), (v, r.stderr[:300])
+    r = subprocess.run([str(BIN), "--min-peak-intensity", "0.0"], capture_output=True, text=True)
+    assert "invalid" in r.stderr.lower()  # proves the check above can fail
