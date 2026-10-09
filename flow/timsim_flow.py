@@ -544,6 +544,12 @@ def do_sign(cfg, sample_id, P, artifact, truth, kind, renderer):
     )
 
 
+def _legacy_rt_kwargs(cfg) -> dict:
+    """The four parameters of v1's ORIGINAL RT peak model, for the Bruker renders."""
+    return dict(legacy_rt_sigma_mean=cfg.legacy_rt_sigma_mean, legacy_rt_sigma_var=cfg.legacy_rt_sigma_var,
+                legacy_rt_lambda_mean=cfg.legacy_rt_lambda_mean, legacy_rt_lambda_var=cfg.legacy_rt_lambda_var)
+
+
 def _bruker_n_frames(reference_d, gradient_s, cycle_seconds=0.0):
     """`--gradient-s` → `timsim-render --n-frames`. 0 keeps the reference `.d`'s own length.
 
@@ -589,7 +595,7 @@ def do_render(cfg, sample_id, P, control=False):
                   ion_count_noise=str(cfg.ion_count_noise).lower(), instrument_cv=cfg.instrument_cv,
                   run_rt_sd=cfg.run_rt_sd, run_im_sd=cfg.run_im_sd,
                   run_intensity_cv=cfg.run_intensity_cv, target_p=cfg.target_p,
-                  n_frames=cfg.n_frames)
+                  n_frames=cfg.n_frames, **_legacy_rt_kwargs(cfg))
     if getattr(cfg, "spike_into", None):
         fn = render_spike_control if control else render_spike
         return fn(P, *inputs, spike_into=cfg.spike_into, **common)
@@ -917,6 +923,10 @@ _RENDER_HEAD = (
     # replays its DIA cycle (`dia.rs`) and samples A2 noise for every output frame, as v1 did when it
     # ran `gradient_length = 3600` on a 31-min blank. Set via `--gradient-s` (see `_bruker_n_frames`).
     "--n-frames {n_frames} "
+    # v1's ORIGINAL RT peak model's parameters (timsim-cli `--peak-shape per-peptide-legacy`). Passed for
+    # every shape — the binary ignores them for the others — so the command names the full config.
+    "--legacy-rt-sigma-mean {legacy_rt_sigma_mean} --legacy-rt-sigma-var {legacy_rt_sigma_var} "
+    "--legacy-rt-lambda-mean {legacy_rt_lambda_mean} --legacy-rt-lambda-var {legacy_rt_lambda_var} "
     # A3 + run-to-run measurement variation. A3 is counting statistics on the ANALYTE signal
     # (distinct from --noise-real-data, which is background); the run-* terms displace a peak
     # per run, keyed on (sample, precursor), so technical replicates stop being bit-identical.
@@ -943,6 +953,8 @@ def render(
     ion_count_noise: str = "false", instrument_cv: float = 0.0,
     run_rt_sd: float = 0.0, run_im_sd: float = 0.0,
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
+    legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
+    legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
 ):
     """MEASUREMENT (Bruker): the lean v2 projector places `ion_spectra` onto the reference `.d`'s DIA grid.
     A1 signal-m/z noise is always wired (`--noise-mz-ppm/-frag-ppm`; 0 = off, byte-identical). One node per
@@ -964,6 +976,8 @@ def render_a2(
     ion_count_noise: str = "false", instrument_cv: float = 0.0,
     run_rt_sd: float = 0.0, run_im_sd: float = 0.0,
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
+    legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
+    legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
 ):
     """render + A2 real-data background sampled from the reference `.d` (the v1 DIA recipe with A1)."""
     raw = output(BrukerRawDataV2)
@@ -983,6 +997,8 @@ def render_a2_control(
     ion_count_noise: str = "false", instrument_cv: float = 0.0,
     run_rt_sd: float = 0.0, run_im_sd: float = 0.0,
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
+    legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
+    legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
 ):
     """A2 background-ONLY control (`--noise-only`): the real-data background alone, same seed — searched, its
     IDs subtracted from FDP (score_bruker_bg)."""
@@ -1001,6 +1017,8 @@ def render_spike(
     ion_count_noise: str = "false", instrument_cv: float = 0.0,
     run_rt_sd: float = 0.0, run_im_sd: float = 0.0,
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
+    legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
+    legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
 ):
     """Spike-into-real: overlay the synthetic signal additively onto a real `.d` (`--spike-into`)."""
     raw = output(BrukerRawDataV2)
@@ -1018,6 +1036,8 @@ def render_spike_control(
     ion_count_noise: str = "false", instrument_cv: float = 0.0,
     run_rt_sd: float = 0.0, run_im_sd: float = 0.0,
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
+    legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
+    legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
 ):
     """Spike background control (`--spike-into X --noise-only`): a re-encoded copy of X, no synthetic —
     searched, its IDs subtracted from FDP."""
@@ -1041,6 +1061,8 @@ def render_spike_control(
     # took the same peak-shape / clock / per-ion-mobility changes as DIA.
     "--peak-shape {peak_shape} --cycle-seconds {cycle_seconds} "
     "--mobility-std-target {mobility_std_target} --n-sigma {n_sigma} "
+    "--legacy-rt-sigma-mean {legacy_rt_sigma_mean} --legacy-rt-sigma-var {legacy_rt_sigma_var} "
+    "--legacy-rt-lambda-mean {legacy_rt_lambda_mean} --legacy-rt-lambda-var {legacy_rt_lambda_var} "
     "--precursors-every {precursors_every} --max-precursors {max_precursors} --exclusion-width {exclusion_width} "
     "--out {raw} --dda-truth {truth}",
     threads=2,
@@ -1060,6 +1082,8 @@ def render_dda(
     exclusion_width: int,
     peak_shape: str = "per-peptide", cycle_seconds: float = 0.0,
     mobility_std_target: float = 0.009, n_sigma: float = 3.0,
+    legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
+    legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
 ):
     """MEASUREMENT (Bruker DDA-PASEF): MS1 surveys every `precursors_every` frames, top-N (`max_precursors`)
     precursor selection with `exclusion_width`-frame dynamic exclusion, band-limited MS2 on the reference's
@@ -1780,6 +1804,7 @@ def timsim_bruker_dda_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
         cycle_seconds=cfg.cycle_seconds,
         mobility_std_target=cfg.mobility_std_target,
         n_sigma=cfg.n_sigma,
+        **_legacy_rt_kwargs(cfg),
     )
     P.signed = do_sign(cfg, sample_id, P, P.raw, P.truth, "d", "timsim-render")
     # ── phase 2 (opt-in): Sage-search the .d + score against the selection-event answer key ──
@@ -1916,6 +1941,19 @@ def _parser() -> argparse.ArgumentParser:
                     help="Bruker DIA render length in seconds; 0 (default) = the reference .d's own length. "
                          "Converted to timsim-render --n-frames with the renderer's frame clock (e.g. 3600 on "
                          "a 31-min blank replays its DIA cycle, as v1's gradient_length did)")
+    ap.add_argument("--peak-shape", default="per-peptide",
+                    choices=["per-peptide", "per-peptide-legacy", "emg", "gaussian"],
+                    help="elution peak model (timsim-render --peak-shape). per-peptide = v1's later Beta model "
+                         "(default); per-peptide-legacy = v1's ORIGINAL model (the deposited TimSim DIA-H01 "
+                         "runs), set with --legacy-rt-*; Bruker renders only")
+    ap.add_argument("--legacy-rt-sigma-mean", type=float, default=1.5,
+                    help="per-peptide-legacy: mean RT sigma, s (v1 mean_std_rt; DIA-H01 used 0.9)")
+    ap.add_argument("--legacy-rt-sigma-var", type=float, default=0.3,
+                    help="per-peptide-legacy: VARIANCE of that sigma (v1 variance_std_rt; DIA-H01 0.2)")
+    ap.add_argument("--legacy-rt-lambda-mean", type=float, default=0.3,
+                    help="per-peptide-legacy: mean EMG rate, 1/s (v1 mean_skewness; DIA-H01 1.5)")
+    ap.add_argument("--legacy-rt-lambda-var", type=float, default=0.1,
+                    help="per-peptide-legacy: VARIANCE of that rate (v1 variance_skewness; DIA-H01 0.01)")
     ap.add_argument("--bruker-dda", help="build the Bruker DDA-PASEF .d pipeline (timsim-render --dda) against "
                                          "this reference .d — top-N selection, searched by Sage (not DiaNN)")
     ap.add_argument("--dda-precursors-every", type=int, default=10, help="DDA: MS1 survey every Nth frame")
@@ -2019,6 +2057,10 @@ def build_cfg(a) -> SimpleNamespace:
         intensity_scale=a.intensity_scale,
         noise_mz_ppm=a.noise_mz_ppm,
         peak_shape=getattr(a, "peak_shape", "per-peptide"),
+        legacy_rt_sigma_mean=a.legacy_rt_sigma_mean,
+        legacy_rt_sigma_var=a.legacy_rt_sigma_var,
+        legacy_rt_lambda_mean=a.legacy_rt_lambda_mean,
+        legacy_rt_lambda_var=a.legacy_rt_lambda_var,
         cycle_seconds=getattr(a, "cycle_seconds", 0.0),
         mobility_std_target=getattr(a, "mobility_std_target", 0.009),
         n_sigma=getattr(a, "n_sigma", 3.0),
@@ -2083,6 +2125,11 @@ def select_build(a, ap: argparse.ArgumentParser | None = None):
                                           or not a.bruker_reference):
         fail("--gradient-s applies to the Bruker DIA render only (--bruker-reference, without --spike-into, "
              "whose frames must match the real run); SCIEX has --sciex-gradient-s, DDA is not wired yet")
+    if getattr(a, "peak_shape", "per-peptide") != "per-peptide" and (a.sciex or a.thermo_template):
+        # The Thermo/SCIEX renders are not given --peak-shape (they keep their own default), so any other
+        # choice would be silently ignored there; per-peptide-legacy is not implemented by them at all.
+        fail("--peak-shape applies to the Bruker render only (timsim-render); the Thermo/SCIEX renders use "
+             "their own default shape")
     if a.sciex:
         return timsim_sciex_pipeline
     if a.thermo_template:

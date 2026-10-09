@@ -162,3 +162,37 @@ def test_job_and_cli_resolve_the_same_quant_commands(tmp_path):
                samples=["A_R1", "B_R1"], max_peptides=5000, mods=str(CONF / "mods_basic.toml"),
                bruker_reference=REF, search_fasta=str(CONF / "hela_subset.fasta"))
     assert masked(commands(cfg, tmp_path)) == masked(cli_commands(as_argv(cfg), tmp_path))
+
+
+@needs_ref
+def test_legacy_peak_shape_reaches_both_renders(tmp_path):
+    cfg = base(bruker_reference=REF, noise_real_data=True, gradient_s=3601.5, peak_shape="per-peptide-legacy",
+               legacy_rt_sigma_mean=0.9, legacy_rt_sigma_var=0.2, legacy_rt_lambda_mean=1.5, legacy_rt_lambda_var=0.01,
+               search_fasta=str(CONF / "hela_subset.fasta"))  # a search is what adds the noise-only control
+    renders = [c for c in commands(cfg, tmp_path) if "/timsim-render --" in c]
+    assert len(renders) == 2 and sum("--noise-only" in c for c in renders) == 1, renders
+    for c in renders:
+        assert "--peak-shape per-peptide-legacy" in c and "--n-frames 34155" in c
+        assert "--legacy-rt-sigma-mean 0.9 --legacy-rt-sigma-var 0.2" in c
+        assert "--legacy-rt-lambda-mean 1.5 --legacy-rt-lambda-var 0.01" in c
+
+
+def test_legacy_peak_shape_refused_for_thermo(tmp_path):
+    for shape in ("per-peptide-legacy", "gaussian"):  # any non-default shape would be ignored there
+        with pytest.raises(SystemExit, match="Bruker render only"):
+            commands(base(thermo_template="/nonexistent/template.raw", peak_shape=shape), tmp_path)
+
+
+def test_unknown_peak_shape_refused(tmp_path):
+    with pytest.raises(SystemExit, match="expected one of"):
+        commands(base(peak_shape="legacy"), tmp_path)
+
+
+@needs_ref
+def test_job_and_cli_agree_on_custom_legacy_values(tmp_path):
+    cfg = base(bruker_reference=REF, search_fasta=str(CONF / "hela_subset.fasta"), noise_real_data=True,
+               gradient_s=3601.5, peak_shape="per-peptide-legacy", legacy_rt_sigma_mean=0.9,
+               legacy_rt_sigma_var=0.2, legacy_rt_lambda_mean=1.5, legacy_rt_lambda_var=0.01)
+    sample = cfg.pop("sample")
+    assert masked(commands(dict(cfg, sample=sample), tmp_path)) == \
+        masked(cli_commands(as_argv(dict(cfg, samples=[sample])), tmp_path))
