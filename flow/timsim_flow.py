@@ -544,6 +544,37 @@ def do_sign(cfg, sample_id, P, artifact, truth, kind, renderer):
     )
 
 
+def _bruker_n_frames(reference_d, gradient_s, cycle_seconds=0.0):
+    """`--gradient-s` → `timsim-render --n-frames`. 0 keeps the reference `.d`'s own length.
+
+    The frame period is the one `timsim-render` will use: `--cycle-seconds` if set, otherwise the
+    reference's mean frame period, measured exactly as `render.rs::mean_frame_period` does — span over
+    interval count, refusing a non-increasing time column. Computing it here rather than in the binary
+    keeps the frame count, which is what the renderer consumes, visible in the command string."""
+    if not gradient_s:
+        return 0
+    import math
+    if not math.isfinite(gradient_s) or gradient_s < 0:
+        raise SystemExit(f"error: --gradient-s must be a finite number >= 0 (got {gradient_s})")
+    if cycle_seconds and not (math.isfinite(cycle_seconds) and cycle_seconds > 0):
+        raise SystemExit(f"error: --cycle-seconds must be a finite number > 0 (got {cycle_seconds})")
+    period = cycle_seconds
+    if not period:
+        import sqlite3
+        con = sqlite3.connect(f"file:{reference_d}/analysis.tdf?mode=ro", uri=True)
+        try:
+            times = [t for (t,) in con.execute("SELECT Time FROM Frames ORDER BY Id")]
+        finally:
+            con.close()
+        if len(times) < 2 or any(not (b > a) for a, b in zip(times, times[1:])):
+            raise SystemExit(f"error: cannot measure a frame period from {reference_d} (Frames.Time not strictly increasing)")
+        period = (times[-1] - times[0]) / (len(times) - 1)
+    n = round(gradient_s / period)
+    if n < 1:
+        raise SystemExit(f"error: --gradient-s {gradient_s} is shorter than one frame ({period:.6f} s)")
+    return n
+
+
 def do_render(cfg, sample_id, P, control=False):
     """Pick + call the right Bruker render node for cfg's noise/spike mode. `control=True` renders the
     background-only variant (`--noise-only`) for the FDP-subtraction control. Returns (raw, truth)."""
@@ -557,7 +588,8 @@ def do_render(cfg, sample_id, P, control=False):
                   mobility_std_target=cfg.mobility_std_target, n_sigma=cfg.n_sigma,
                   ion_count_noise=str(cfg.ion_count_noise).lower(), instrument_cv=cfg.instrument_cv,
                   run_rt_sd=cfg.run_rt_sd, run_im_sd=cfg.run_im_sd,
-                  run_intensity_cv=cfg.run_intensity_cv, target_p=cfg.target_p)
+                  run_intensity_cv=cfg.run_intensity_cv, target_p=cfg.target_p,
+                  n_frames=cfg.n_frames)
     if getattr(cfg, "spike_into", None):
         fn = render_spike_control if control else render_spike
         return fn(P, *inputs, spike_into=cfg.spike_into, **common)
@@ -880,6 +912,11 @@ _RENDER_HEAD = (
     # stale result after the fact, it does not prevent one being produced and reused.
     "--peak-shape {peak_shape} --cycle-seconds {cycle_seconds} "
     "--mobility-std-target {mobility_std_target} --n-sigma {n_sigma} "
+    # Run LENGTH in frames; 0 = the reference `.d`'s own frame count. Explicit for the same cache reason
+    # as above (adding it re-fingerprints every DIA render once). A gradient longer than the reference
+    # replays its DIA cycle (`dia.rs`) and samples A2 noise for every output frame, as v1 did when it
+    # ran `gradient_length = 3600` on a 31-min blank. Set via `--gradient-s` (see `_bruker_n_frames`).
+    "--n-frames {n_frames} "
     # A3 + run-to-run measurement variation. A3 is counting statistics on the ANALYTE signal
     # (distinct from --noise-real-data, which is background); the run-* terms displace a peak
     # per run, keyed on (sample, precursor), so technical replicates stop being bit-identical.
@@ -905,7 +942,7 @@ def render(
     mobility_std_target: float = 0.009, n_sigma: float = 3.0,
     ion_count_noise: str = "false", instrument_cv: float = 0.0,
     run_rt_sd: float = 0.0, run_im_sd: float = 0.0,
-    run_intensity_cv: float = 0.0, target_p: float = 0.0,
+    run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
 ):
     """MEASUREMENT (Bruker): the lean v2 projector places `ion_spectra` onto the reference `.d`'s DIA grid.
     A1 signal-m/z noise is always wired (`--noise-mz-ppm/-frag-ppm`; 0 = off, byte-identical). One node per
@@ -926,7 +963,7 @@ def render_a2(
     mobility_std_target: float = 0.009, n_sigma: float = 3.0,
     ion_count_noise: str = "false", instrument_cv: float = 0.0,
     run_rt_sd: float = 0.0, run_im_sd: float = 0.0,
-    run_intensity_cv: float = 0.0, target_p: float = 0.0,
+    run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
 ):
     """render + A2 real-data background sampled from the reference `.d` (the v1 DIA recipe with A1)."""
     raw = output(BrukerRawDataV2)
@@ -945,7 +982,7 @@ def render_a2_control(
     mobility_std_target: float = 0.009, n_sigma: float = 3.0,
     ion_count_noise: str = "false", instrument_cv: float = 0.0,
     run_rt_sd: float = 0.0, run_im_sd: float = 0.0,
-    run_intensity_cv: float = 0.0, target_p: float = 0.0,
+    run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
 ):
     """A2 background-ONLY control (`--noise-only`): the real-data background alone, same seed — searched, its
     IDs subtracted from FDP (score_bruker_bg)."""
@@ -963,7 +1000,7 @@ def render_spike(
     mobility_std_target: float = 0.009, n_sigma: float = 3.0,
     ion_count_noise: str = "false", instrument_cv: float = 0.0,
     run_rt_sd: float = 0.0, run_im_sd: float = 0.0,
-    run_intensity_cv: float = 0.0, target_p: float = 0.0,
+    run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
 ):
     """Spike-into-real: overlay the synthetic signal additively onto a real `.d` (`--spike-into`)."""
     raw = output(BrukerRawDataV2)
@@ -980,7 +1017,7 @@ def render_spike_control(
     mobility_std_target: float = 0.009, n_sigma: float = 3.0,
     ion_count_noise: str = "false", instrument_cv: float = 0.0,
     run_rt_sd: float = 0.0, run_im_sd: float = 0.0,
-    run_intensity_cv: float = 0.0, target_p: float = 0.0,
+    run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
 ):
     """Spike background control (`--spike-into X --noise-only`): a re-encoded copy of X, no synthetic —
     searched, its IDs subtracted from FDP."""
@@ -1872,6 +1909,10 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--thermo-template", help="build the Thermo .raw pipeline against this template")
     ap.add_argument("--bruker-reference", help="build the LEAN v2 Bruker .d pipeline (timsim-render) against "
                                                "this reference DIA .d — imspy-free, replaces the v1 `simulate` seam")
+    ap.add_argument("--gradient-s", type=float, default=0.0,
+                    help="Bruker DIA render length in seconds; 0 (default) = the reference .d's own length. "
+                         "Converted to timsim-render --n-frames with the renderer's frame clock (e.g. 3600 on "
+                         "a 31-min blank replays its DIA cycle, as v1's gradient_length did)")
     ap.add_argument("--bruker-dda", help="build the Bruker DDA-PASEF .d pipeline (timsim-render --dda) against "
                                          "this reference .d — top-N selection, searched by Sage (not DiaNN)")
     ap.add_argument("--dda-precursors-every", type=int, default=10, help="DDA: MS1 survey every Nth frame")
@@ -2013,6 +2054,11 @@ def build_cfg(a) -> SimpleNamespace:
         search_threads=a.search_threads,
         # spike-into implies the reference geometry comes from the spike target itself.
         reference_d=a.spike_into or a.bruker_reference or a.bruker_dda,
+        # Only the Bruker DIA renders take a length; select_build rejects --gradient-s elsewhere.
+        n_frames=(_bruker_n_frames(a.bruker_reference, getattr(a, "gradient_s", 0.0),
+                                   getattr(a, "cycle_seconds", 0.0))
+                  if a.bruker_reference and not (a.spike_into or a.bruker_dda or a.sciex or a.thermo_template)
+                  else 0),
         # Bruker DDA-PASEF selection params
         dda_precursors_every=a.dda_precursors_every,
         dda_max_precursors=a.dda_max_precursors,
@@ -2030,6 +2076,10 @@ def select_build(a, ap: argparse.ArgumentParser | None = None):
     """Pick the pipeline factory implied by the flags (and validate coupled ones)."""
     def fail(msg):
         ap.error(msg) if ap else (_ for _ in ()).throw(SystemExit(f"error: {msg}"))
+    if getattr(a, "gradient_s", 0.0) and (a.sciex or a.thermo_template or a.bruker_dda or a.spike_into
+                                          or not a.bruker_reference):
+        fail("--gradient-s applies to the Bruker DIA render only (--bruker-reference, without --spike-into, "
+             "whose frames must match the real run); SCIEX has --sciex-gradient-s, DDA is not wired yet")
     if a.sciex:
         return timsim_sciex_pipeline
     if a.thermo_template:
