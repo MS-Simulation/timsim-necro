@@ -196,3 +196,12 @@ def test_job_and_cli_agree_on_custom_legacy_values(tmp_path):
     sample = cfg.pop("sample")
     assert masked(commands(dict(cfg, sample=sample), tmp_path)) == \
         masked(cli_commands(as_argv(dict(cfg, samples=[sample])), tmp_path))
+
+
+@needs_ref
+def test_floor_reaches_the_bruker_renders(tmp_path):
+    for floor, want in ((0, "--min-peak-intensity 0.0"), (1, "--min-peak-intensity 1.0")):
+        cfg = base(bruker_reference=REF, noise_real_data=True, search_fasta=str(CONF / "hela_subset.fasta"),
+                   min_peak_intensity=floor)
+        renders = [c for c in commands(cfg, tmp_path) if "/timsim-render --" in c]
+        assert len(renders) == 2 and all(want in c for c in renders), (floor, renders)
