@@ -226,6 +226,58 @@ def test_the_render_binary_parses_the_floor_spelling():
     assert "invalid" in r.stderr.lower()  # proves the check above can fail
 
 
+@needs_ref
+def test_ms2_gain_reaches_the_bruker_renders(tmp_path):
+    for gain, want in ((1.0, "--ms2-gain 1.0 "), (2.5, "--ms2-gain 2.5 ")):
+        cfg = base(bruker_reference=REF, noise_real_data=True, search_fasta=str(CONF / "hela_subset.fasta"),
+                   ms2_gain=gain)
+        renders = [c for c in commands(cfg, tmp_path) if "/timsim-render --" in c]
+        assert len(renders) == 2 and all(want in c for c in renders), (gain, renders)
+
+
+@needs_ref
+def test_job_and_cli_agree_on_ms2_gain(tmp_path):
+    cfg = base(bruker_reference=REF, search_fasta=str(CONF / "hela_subset.fasta"), ms2_gain=2.5)
+    sample = cfg.pop("sample")
+    assert masked(commands(dict(cfg, sample=sample), tmp_path)) == \
+        masked(cli_commands(as_argv(dict(cfg, samples=[sample])), tmp_path))
+
+
+def test_ms2_gain_refused_where_it_would_be_ignored(tmp_path):
+    with pytest.raises(SystemExit, match="Bruker DIA render only"):
+        commands(base(thermo_template="/nonexistent/template.raw", ms2_gain=2.0), tmp_path)
+    for bad in (0.0, -1.0, float("nan"), float("inf"), 1001.0):
+        with pytest.raises(SystemExit, match=r"finite number in \(0, 1000\]"):
+            commands(base(ms2_gain=bad), tmp_path)
+
+
+@pytest.mark.skipif(not BIN.exists(), reason="timsim-render binary not built here")
+def test_the_render_binary_parses_the_ms2_gain_spelling():
+    import subprocess
+    r = subprocess.run([str(BIN), "--ms2-gain", "2.5", "--precursors", "/nonexistent"], capture_output=True, text=True)
+    assert "unexpected argument" not in r.stderr and "invalid" not in r.stderr.lower(), r.stderr[:300]
+
+
+@needs_ref
+def test_ms2_gain_reaches_the_spike_renders(tmp_path):
+    # The spike pair (render_spike + its --noise-only control) shares _RENDER_HEAD with the A2 pair.
+    cfg = base(spike_into=REF, search_fasta=str(CONF / "hela_subset.fasta"), ms2_gain=3)  # int, coerced
+    renders = [c for c in commands(cfg, tmp_path) if "/timsim-render --" in c]
+    assert len(renders) == 2 and all("--spike-into" in c and "--ms2-gain 3.0 " in c for c in renders), renders
+
+
+@needs_ref
+def test_ms2_gain_refused_for_bruker_dda(tmp_path):
+    with pytest.raises(SystemExit, match="Bruker DIA render only"):
+        commands(base(bruker_dda=REF, ms2_gain=2.0), tmp_path)
+
+
+def test_ms2_gain_refused_without_a_bruker_render(tmp_path):
+    for over in (dict(sciex=True), dict()):  # SCIEX, and the reference-free legacy pipeline
+        with pytest.raises(SystemExit, match="Bruker DIA render only"):
+            commands(base(ms2_gain=2.0, **over), tmp_path)
+    with pytest.raises(SystemExit, match="not a number|expected a number|not a string"):
+        commands(base(ms2_gain="2.0"), tmp_path)  # a quoted number is a typo, as for every other key
 TABLE_ROWS = "n_kr\tn_h\tlength\tf1\tf2\tf3\tf4\n1\t0\t9\t0\t1\t0\t0\n2\t0\t12\t0\t0.6\t0.4\t0\n"
 
 

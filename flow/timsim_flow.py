@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -613,6 +614,7 @@ def do_render(cfg, sample_id, P, control=False):
                   run_rt_sd=cfg.run_rt_sd, run_im_sd=cfg.run_im_sd,
                   run_intensity_cv=cfg.run_intensity_cv, target_p=cfg.target_p,
                   n_frames=cfg.n_frames, min_peak_intensity=_bruker_floor(cfg.min_peak_intensity),
+                  ms2_gain=cfg.ms2_gain,
                   **_legacy_rt_kwargs(cfg))
     if getattr(cfg, "spike_into", None):
         fn = render_spike_control if control else render_spike
@@ -973,6 +975,10 @@ _RENDER_HEAD = (
     # Reporting floor; 0 = inherit the reference `.d`'s own (timsim-render's default, handoff §1). 1 = v1's
     # keep-every-non-zero-bin behaviour — the arm a v1-vs-v2 floor ablation needs.
     "--min-peak-intensity {min_peak_intensity} "
+    # Fragment (MS2) gain; 1 = unit-total fragment spectra (byte-identical). v1 scaled max-normalised
+    # Prosit intensities, putting several times more signal into MS2 than MS1 — reproducing a v1 dataset
+    # needs a gain calibrated on simulated signal. Explicit for the same cache reason as above.
+    "--ms2-gain {ms2_gain} "
     # v1's ORIGINAL RT peak model's parameters (timsim-cli `--peak-shape per-peptide-legacy`). Passed for
     # every shape — the binary ignores them for the others — so the command names the full config.
     "--legacy-rt-sigma-mean {legacy_rt_sigma_mean} --legacy-rt-sigma-var {legacy_rt_sigma_var} "
@@ -1005,7 +1011,7 @@ def render(
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
-    min_peak_intensity: int = 0,
+    min_peak_intensity: int = 0, ms2_gain: float = 1.0,
 ):
     """MEASUREMENT (Bruker): the lean v2 projector places `ion_spectra` onto the reference `.d`'s DIA grid.
     A1 signal-m/z noise is always wired (`--noise-mz-ppm/-frag-ppm`; 0 = off, byte-identical). One node per
@@ -1029,7 +1035,7 @@ def render_a2(
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
-    min_peak_intensity: int = 0,
+    min_peak_intensity: int = 0, ms2_gain: float = 1.0,
 ):
     """render + A2 real-data background sampled from the reference `.d` (the v1 DIA recipe with A1)."""
     raw = output(BrukerRawDataV2)
@@ -1051,7 +1057,7 @@ def render_a2_control(
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
-    min_peak_intensity: int = 0,
+    min_peak_intensity: int = 0, ms2_gain: float = 1.0,
 ):
     """A2 background-ONLY control (`--noise-only`): the real-data background alone, same seed — searched, its
     IDs subtracted from FDP (score_bruker_bg)."""
@@ -1072,7 +1078,7 @@ def render_spike(
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
-    min_peak_intensity: int = 0,
+    min_peak_intensity: int = 0, ms2_gain: float = 1.0,
 ):
     """Spike-into-real: overlay the synthetic signal additively onto a real `.d` (`--spike-into`)."""
     raw = output(BrukerRawDataV2)
@@ -1092,7 +1098,7 @@ def render_spike_control(
     run_intensity_cv: float = 0.0, target_p: float = 0.0, n_frames: int = 0,
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
-    min_peak_intensity: int = 0,
+    min_peak_intensity: int = 0, ms2_gain: float = 1.0,
 ):
     """Spike background control (`--spike-into X --noise-only`): a re-encoded copy of X, no synthetic —
     searched, its IDs subtracted from FDP."""
@@ -2006,6 +2012,10 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--dda-precursors-every", type=int, default=10, help="DDA: MS1 survey every Nth frame")
     ap.add_argument("--dda-max-precursors", type=int, default=25, help="DDA: max precursors per MS2 (PASEF) frame")
     ap.add_argument("--dda-exclusion-width", type=int, default=25, help="DDA: dynamic-exclusion window (frames)")
+    ap.add_argument("--ms2-gain", type=float, default=1.0,
+                    help="Bruker DIA: multiply fragment (MS2) signal by this factor (timsim-render --ms2-gain). "
+                         "1 = unit-total fragment spectra (default). v1 put several times more signal into "
+                         "MS2 than MS1; reproducing a v1 dataset needs a gain calibrated on simulated signal")
     ap.add_argument("--min-peak-intensity", type=float, default=0.0,
                     help="reporting floor; 0 = inherit (Thermo: the template's MS1 floor; Bruker DIA: the "
                          "reference .d's floor), 1 = keep every non-zero bin (v1). Thermo: supply "
@@ -2118,6 +2128,7 @@ def build_cfg(a) -> SimpleNamespace:
         min_charge_contrib=getattr(a, "min_charge_contrib", 0.0),
         min_peak_intensity=a.min_peak_intensity,
         min_peak_intensity_ms2=a.min_peak_intensity_ms2,
+        ms2_gain=getattr(a, "ms2_gain", 1.0),
         template_ms1_median=a.template_ms1_median,
         flyability=a.flyability,
         flyability_median=a.flyability_median,
@@ -2183,6 +2194,12 @@ def select_build(a, ap: argparse.ArgumentParser | None = None):
                                           or not a.bruker_reference):
         fail("--gradient-s applies to the Bruker DIA render only (--bruker-reference, without --spike-into, "
              "whose frames must match the real run); SCIEX has --sciex-gradient-s, DDA is not wired yet")
+    gain = getattr(a, "ms2_gain", 1.0)
+    if not (isinstance(gain, (int, float)) and math.isfinite(gain) and 0 < gain <= 1000):
+        fail(f"--ms2-gain must be a finite number in (0, 1000] (got {gain!r})")  # timsim-render's bound
+    if gain != 1.0 and (a.sciex or a.thermo_template or a.bruker_dda or not (a.bruker_reference or a.spike_into)):
+        # Only the Bruker DIA render implements it; anywhere else it would be silently ignored.
+        fail("--ms2-gain applies to the Bruker DIA render only (--bruker-reference / --spike-into)")
     if getattr(a, "peak_shape", "per-peptide") != "per-peptide" and (a.sciex or a.thermo_template):
         # The Thermo/SCIEX renders are not given --peak-shape (they keep their own default), so any other
         # choice would be silently ignored there; per-peptide-legacy is not implemented by them at all.
