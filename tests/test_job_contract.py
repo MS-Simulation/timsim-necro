@@ -1,5 +1,6 @@
 """The job-TOML entry point (`timsim_flow.job`) must build the same experiments the CLI builds, and
 refuse what the CLI refuses. Pipelines are only constructed and resolved here, never run."""
+import re
 import sys
 from pathlib import Path
 
@@ -237,9 +238,51 @@ def test_empirical_charge_model_uses_the_table_node(tmp_path):
 
 
 def test_default_charge_model_command_is_unchanged(tmp_path):
-    # The site-specific node must keep its exact command, so existing caches stay valid.
+    # The site-specific node must keep its EXACT command (and so its fingerprint), so existing caches
+    # stay valid. The expected string is the pre-change template, resolved.
     pre = [c for c in commands(base(), tmp_path) if "/timsim-precursors " in c]
-    assert len(pre) == 1 and "--charge-model site-specific" in pre[0] and "--charge-table" not in pre[0], pre
+    assert len(pre) == 1, pre
+    got = re.sub(r"[0-9a-f]{64}", "<fp>", pre[0].replace(str(tmp_path), "<OUT>"))
+    got = re.sub(r"tools:timsim-precursors=\S+", "tools:timsim-precursors=<sha>", got).split("/timsim-precursors ", 1)[1]
+    # Verified byte-identical (fingerprints included) to `main` before this option existed.
+    assert got == (
+        "--peptides <OUT>/digest/<fp>/peptides.parquet --modforms <OUT>/modify/<fp>/modforms.parquet "
+        "--out <OUT>/precursors/<fp>/precursors.parquet --charge-model site-specific --seed 41 "
+        "--min-charge-contrib 0.0 --flyability lognormal --flyability-median 0.01 --flyability-sigma 1.0  "
+        "# tools:timsim-precursors=<sha>"), got
+
+
+def test_binomial_charge_model_routes_to_the_plain_node(tmp_path):
+    pre = [c for c in commands(base(charge_model="binomial"), tmp_path) if "/timsim-precursors " in c]
+    assert len(pre) == 1 and "--charge-model binomial" in pre[0] and "--charge-table" not in pre[0], pre
+
+
+def test_editing_the_charge_table_invalidates_the_empirical_node(tmp_path):
+    table = tmp_path / "t.tsv"
+    table.write_text(TABLE_ROWS)
+    dag = DAG(tmp_path / "dag")
+    P = Pipeline(dag)
+    tf.job(P, base(charge_model="empirical", charge_table=str(table)))
+    node = P.precursors
+    token = lambda: node.node_type.invalidator(node)  # noqa: E731
+    before = token()
+    table.write_text(TABLE_ROWS + "3\t1\t20\t0\t0.3\t0.4\t0.3\n")
+    assert token() != before, "an in-place table edit must change the empirical node's token"
+
+
+def test_relative_charge_table_is_resolved(tmp_path, monkeypatch):
+    (tmp_path / "t.tsv").write_text(TABLE_ROWS)
+    monkeypatch.chdir(tmp_path)
+    pre = [c for c in commands(base(charge_model="empirical", charge_table="t.tsv"), tmp_path / "dag")
+           if "/timsim-precursors " in c]
+    assert f"--charge-table {tmp_path / 't.tsv'} " in pre[0], pre
+
+
+def test_cli_enforces_charge_table_coupling(tmp_path):
+    import subprocess
+    r = subprocess.run([sys.executable, str(FLOW / "timsim_flow.py"), "--outdir", str(tmp_path),
+                        "--charge-model", "empirical", "--dry-run"], capture_output=True, text=True, cwd=FLOW)
+    assert r.returncode != 0 and "needs --charge-table" in r.stderr, r.stderr[-300:]
 
 
 def test_charge_table_coupling_is_enforced(tmp_path):

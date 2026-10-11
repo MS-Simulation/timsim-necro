@@ -164,6 +164,14 @@ class Precursors(NodeType):
     filename = "precursors.parquet"
 
 
+class PrecursorsEmpirical(Precursors):
+    """`Precursors` from the EMPIRICAL charge model. A subclass only so the node can hash the reference
+    table's CONTENT (see `hashes_file`): the table is read by the rule, so editing it in place must
+    invalidate the node, exactly like a spec file. Consumers typed `Precursors` accept it unchanged."""
+
+    invalidator = hashes_file("charge_table")
+
+
 class PrecursorCCS(NodeType):
     """Collision cross section per precursor. STRUCTURE — instrument-independent, predicted once.
 
@@ -704,9 +712,10 @@ def precursors_empirical(peptides: Peptides, modforms: Modforms, charge_table: s
                          flyability_sigma: float = 1.0):
     """`precursors` with the EMPIRICAL charge model: each peptide's charge shares are resampled from a
     reference table (`timsim_cli::charge_table`) — how a published v1 dataset's charge mix is
-    reproduced. The table is passed by PATH, like the proteome and design specs: editing it in place
-    does not change the fingerprint, so give a changed table a new file name."""
-    precursors = output(Precursors)
+    reproduced. The table is a file dependency: `PrecursorsEmpirical` hashes its content, so an edit in
+    place invalidates the node; `build_cfg` resolves the path, so a relative spelling cannot alias two
+    different files across working directories."""
+    precursors = output(PrecursorsEmpirical)
     return precursors
 
 
@@ -2086,7 +2095,9 @@ def build_cfg(a) -> SimpleNamespace:
         mods=a.mods,
         floor=1e-3,
         charge_model=getattr(a, "charge_model", "site-specific"),
-        charge_table=getattr(a, "charge_table", None),
+        # Resolved: a relative path would make two different files from two working directories one
+        # fingerprint (the content invalidator would catch the difference, but only after the fact).
+        charge_table=str(Path(a.charge_table).resolve()) if getattr(a, "charge_table", None) else None,
         design_spec=a.design_spec,
         digestion_efficiency=0.9,
         timsim_config=a.timsim_config,
