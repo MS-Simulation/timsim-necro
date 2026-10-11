@@ -32,6 +32,7 @@ import math
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -416,6 +417,30 @@ SAGE_CONFIG = os.environ.get("TIMSIM_SAGE_CONFIG", "/scratch/timsim-demo/SAGEBen
 
 _TOOL_SHA: dict[str, str] = {}
 
+# The timsim-predict tools are pip console-script launchers: a six-line stub whose bytes never change,
+# while the output is decided by timsim_predict, pepdl, mscorepy and the model weights. Hashing the stub
+# missed pepdl's padding-mask fix (2+ CCS moved ~35 A^2) entirely. So these tools are stamped by what
+# `<tool> --identity` reports (timsim-predict `_identity`: package trees, model registry, torch).
+# Only these three: other script launchers (v1's `timsim`) have no --identity and keep byte hashing.
+_IDENTITY_TOOLS = frozenset({"timsim-ccs", "timsim-rt", "timsim-fragments"})
+
+
+def _identity_sha(name: str, resolved: str) -> str:
+    """sha256 of `<tool> --identity`. Failing to get one is an ERROR, not a fallback to the launcher
+    bytes: that fallback is exactly the stale-cache hazard this replaces (e.g. a timsim-predict
+    install that predates --identity)."""
+    try:
+        r = subprocess.run([resolved, "--identity"], capture_output=True, text=True, timeout=120)
+        ident = json.loads(r.stdout) if r.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        ident = None
+    if not isinstance(ident, dict) or ident.get("tool") != name:
+        raise RuntimeError(
+            f"`{resolved} --identity` gave no identity, so its output cannot be fingerprinted. "
+            f"Install a timsim-predict with --identity (`make predict-deps`).")
+    canonical = json.dumps(ident, sort_keys=True, separators=(",", ":"))
+    return "id-" + hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
 
 def _tool_sha(name: str) -> str:
     """Content hash of one tool, memoised. Unresolvable tools hash as `?` rather than raising: a
@@ -425,6 +450,8 @@ def _tool_sha(name: str) -> str:
         resolved = str(path) if path.is_file() else shutil.which(name)
         if resolved is None:
             _TOOL_SHA[name] = "?"
+        elif name in _IDENTITY_TOOLS:
+            _TOOL_SHA[name] = _identity_sha(name, resolved)
         else:
             h = hashlib.sha256()
             with open(resolved, "rb") as fh:
