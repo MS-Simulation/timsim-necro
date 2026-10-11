@@ -255,3 +255,25 @@ def test_the_render_binary_parses_the_ms2_gain_spelling():
     import subprocess
     r = subprocess.run([str(BIN), "--ms2-gain", "2.5", "--precursors", "/nonexistent"], capture_output=True, text=True)
     assert "unexpected argument" not in r.stderr and "invalid" not in r.stderr.lower(), r.stderr[:300]
+
+
+@needs_ref
+def test_ms2_gain_reaches_the_spike_renders(tmp_path):
+    # The spike pair (render_spike + its --noise-only control) shares _RENDER_HEAD with the A2 pair.
+    cfg = base(spike_into=REF, search_fasta=str(CONF / "hela_subset.fasta"), ms2_gain=3)  # int, coerced
+    renders = [c for c in commands(cfg, tmp_path) if "/timsim-render --" in c]
+    assert len(renders) == 2 and all("--spike-into" in c and "--ms2-gain 3.0 " in c for c in renders), renders
+
+
+@needs_ref
+def test_ms2_gain_refused_for_bruker_dda(tmp_path):
+    with pytest.raises(SystemExit, match="Bruker DIA render only"):
+        commands(base(bruker_dda=REF, ms2_gain=2.0), tmp_path)
+
+
+def test_ms2_gain_refused_without_a_bruker_render(tmp_path):
+    for over in (dict(sciex=True), dict()):  # SCIEX, and the reference-free legacy pipeline
+        with pytest.raises(SystemExit, match="Bruker DIA render only"):
+            commands(base(ms2_gain=2.0, **over), tmp_path)
+    with pytest.raises(SystemExit, match="not a number|expected a number|not a string"):
+        commands(base(ms2_gain="2.0"), tmp_path)  # a quoted number is a typo, as for every other key
