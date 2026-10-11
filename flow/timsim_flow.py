@@ -691,6 +691,34 @@ def precursors(peptides: Peptides, modforms: Modforms, charge_model: str, seed: 
     return precursors
 
 
+@command(
+    f"{BIN}/timsim-precursors --peptides {{peptides}} --modforms {{modforms}} "
+    "--out {precursors} --charge-model empirical --charge-table {charge_table} --seed {seed} "
+    "--min-charge-contrib {min_charge_contrib} "
+    "--flyability {flyability} --flyability-median {flyability_median} "
+    "--flyability-sigma {flyability_sigma}"
+)
+def precursors_empirical(peptides: Peptides, modforms: Modforms, charge_table: str, seed: int,
+                         min_charge_contrib: float = 0.0,
+                         flyability: str = "lognormal", flyability_median: float = 1e-2,
+                         flyability_sigma: float = 1.0):
+    """`precursors` with the EMPIRICAL charge model: each peptide's charge shares are resampled from a
+    reference table (`timsim_cli::charge_table`) — how a published v1 dataset's charge mix is
+    reproduced. The table is passed by PATH, like the proteome and design specs: editing it in place
+    does not change the fingerprint, so give a changed table a new file name."""
+    precursors = output(Precursors)
+    return precursors
+
+
+def do_precursors(P, cfg):
+    """The precursors node for cfg's charge model (one call site per pipeline)."""
+    common = dict(seed=cfg.seed, min_charge_contrib=cfg.min_charge_contrib, flyability=cfg.flyability,
+                  flyability_median=cfg.flyability_median, flyability_sigma=cfg.flyability_sigma)
+    if cfg.charge_model == "empirical":
+        return precursors_empirical(P, P.peptides, P.modforms, charge_table=cfg.charge_table, **common)
+    return precursors(P, P.peptides, P.modforms, charge_model=cfg.charge_model, **common)
+
+
 # ram: MEASURED, not guessed — 4.4 GB peak on a full-proteome HeLa run (9,010,877 precursors,
 # 2026-08-01) after the chunked-tokenizer fix. Before that fix this stage peaked at 24.9 GB and was
 # SIGKILLed. See the note above `fragments` on why these declarations matter.
@@ -1489,11 +1517,7 @@ def timsim_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
     # with `TypeError: precursors: missing required inputs`. Passing it also keeps this pipeline's
     # structure fingerprint IDENTICAL to the v2 pipeline's, which is what allows a v1 and a v2 render
     # in one tree to consume the very same peptides.
-    P.precursors = precursors(P,
-        P.peptides, P.modforms, charge_model=cfg.charge_model, seed=cfg.seed,
-        min_charge_contrib=cfg.min_charge_contrib,
-                             flyability=cfg.flyability, flyability_median=cfg.flyability_median, flyability_sigma=cfg.flyability_sigma
-    )
+    P.precursors = do_precursors(P, cfg)
     P.ccs = ccs(P, P.precursors, P.peptides)
     P.rt = rt(P, P.peptides)
 
@@ -1547,9 +1571,7 @@ def timsim_thermo_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
         seed=cfg.seed,
     )
     P.modforms, P.modifications = modify(P, P.peptides, mods_spec=cfg.mods, floor=cfg.floor)
-    P.precursors = precursors(P, P.peptides, P.modforms, charge_model=cfg.charge_model, seed=cfg.seed,
-                             min_charge_contrib=cfg.min_charge_contrib,
-                             flyability=cfg.flyability, flyability_median=cfg.flyability_median, flyability_sigma=cfg.flyability_sigma)
+    P.precursors = do_precursors(P, cfg)
     P.rt = rt(P, P.peptides)
     P.samples, P.runs, P.sample_run_map, P.protein_quantities = design(P, 
         P.proteome, design_spec=cfg.design_spec
@@ -1619,9 +1641,7 @@ def timsim_bruker_v2_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
         seed=cfg.seed,
     )
     P.modforms, P.modifications = modify(P, P.peptides, mods_spec=cfg.mods, floor=cfg.floor)
-    P.precursors = precursors(P, P.peptides, P.modforms, charge_model=cfg.charge_model, seed=cfg.seed,
-                             min_charge_contrib=cfg.min_charge_contrib,
-                             flyability=cfg.flyability, flyability_median=cfg.flyability_median, flyability_sigma=cfg.flyability_sigma)
+    P.precursors = do_precursors(P, cfg)
     P.ccs = ccs(P, P.precursors, P.peptides)
     P.rt = rt(P, P.peptides)
     P.samples, P.runs, P.sample_run_map, P.protein_quantities = design(P, 
@@ -1725,9 +1745,7 @@ def timsim_hye_quant_pipeline(P: Pipeline, cfg, sample_ids) -> None:
         seed=cfg.seed,
     )
     P.modforms, P.modifications = modify(P, P.peptides, mods_spec=cfg.mods, floor=cfg.floor)
-    P.precursors = precursors(P, P.peptides, P.modforms, charge_model=cfg.charge_model, seed=cfg.seed,
-                             min_charge_contrib=cfg.min_charge_contrib,
-                             flyability=cfg.flyability, flyability_median=cfg.flyability_median, flyability_sigma=cfg.flyability_sigma)
+    P.precursors = do_precursors(P, cfg)
     P.ccs = ccs(P, P.precursors, P.peptides)
     P.rt = rt(P, P.peptides)
     P.samples, P.runs, P.sample_run_map, P.protein_quantities = design(P, 
@@ -1777,9 +1795,7 @@ def timsim_bruker_dda_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
         seed=cfg.seed,
     )
     P.modforms, P.modifications = modify(P, P.peptides, mods_spec=cfg.mods, floor=cfg.floor)
-    P.precursors = precursors(P, P.peptides, P.modforms, charge_model=cfg.charge_model, seed=cfg.seed,
-                             min_charge_contrib=cfg.min_charge_contrib,
-                             flyability=cfg.flyability, flyability_median=cfg.flyability_median, flyability_sigma=cfg.flyability_sigma)
+    P.precursors = do_precursors(P, cfg)
     P.ccs = ccs(P, P.precursors, P.peptides)
     P.rt = rt(P, P.peptides)
     P.samples, P.runs, P.sample_run_map, P.protein_quantities = design(P, 
@@ -1846,9 +1862,7 @@ def timsim_sciex_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
         seed=cfg.seed,
     )
     P.modforms, P.modifications = modify(P, P.peptides, mods_spec=cfg.mods, floor=cfg.floor)
-    P.precursors = precursors(P, P.peptides, P.modforms, charge_model=cfg.charge_model, seed=cfg.seed,
-                             min_charge_contrib=cfg.min_charge_contrib,
-                             flyability=cfg.flyability, flyability_median=cfg.flyability_median, flyability_sigma=cfg.flyability_sigma)
+    P.precursors = do_precursors(P, cfg)
     P.rt = rt(P, P.peptides)
     P.samples, P.runs, P.sample_run_map, P.protein_quantities = design(P, 
         P.proteome, design_spec=cfg.design_spec
@@ -1932,6 +1946,12 @@ def _parser() -> argparse.ArgumentParser:
                     help="reuse a prebuilt DIA-NN .speclib instead of regenerating it from the FASTA "
                          "on every run (~42 min / 2.1 GB for the human proteome). Deterministic from "
                          "the FASTA + digest settings, so reuse is equivalent.")
+    ap.add_argument("--charge-model", default="site-specific", choices=["site-specific", "binomial", "empirical"],
+                    help="timsim-precursors charge model. empirical = resample each peptide's charge shares "
+                         "from --charge-table (reproduces a published v1 dataset's charge mix)")
+    ap.add_argument("--charge-table", default=None,
+                    help="empirical charge model: reference TSV (n_kr n_h length f1 f2 f3 f4). Passed by path "
+                         "— a changed table needs a new file name to re-fingerprint")
     ap.add_argument("--min-charge-contrib", type=float, default=0.0,
                     help="drop charge states below this share of a modform's charged mass (v1's "
                          "dia-PASEF config uses 0.25). NOTE this is on the STRUCTURE axis, so it "
@@ -2065,7 +2085,8 @@ def build_cfg(a) -> SimpleNamespace:
         max_peptides=a.max_peptides,
         mods=a.mods,
         floor=1e-3,
-        charge_model="site-specific",
+        charge_model=getattr(a, "charge_model", "site-specific"),
+        charge_table=getattr(a, "charge_table", None),
         design_spec=a.design_spec,
         digestion_efficiency=0.9,
         timsim_config=a.timsim_config,
@@ -2140,6 +2161,13 @@ def select_build(a, ap: argparse.ArgumentParser | None = None):
     """Pick the pipeline factory implied by the flags (and validate coupled ones)."""
     def fail(msg):
         ap.error(msg) if ap else (_ for _ in ()).throw(SystemExit(f"error: {msg}"))
+    model, table = getattr(a, "charge_model", "site-specific"), getattr(a, "charge_table", None)
+    if model == "empirical" and not table:
+        fail("--charge-model empirical needs --charge-table")
+    if table and model != "empirical":
+        fail("--charge-table is only used by --charge-model empirical")
+    if table and not Path(table).is_file():
+        fail(f"--charge-table {table} is not a file")
     if getattr(a, "gradient_s", 0.0) and (a.sciex or a.thermo_template or a.bruker_dda or a.spike_into
                                           or not a.bruker_reference):
         fail("--gradient-s applies to the Bruker DIA render only (--bruker-reference, without --spike-into, "

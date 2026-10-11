@@ -223,3 +223,41 @@ def test_the_render_binary_parses_the_floor_spelling():
         assert "invalid" not in r.stderr.lower(), (v, r.stderr[:300])
     r = subprocess.run([str(BIN), "--min-peak-intensity", "0.0"], capture_output=True, text=True)
     assert "invalid" in r.stderr.lower()  # proves the check above can fail
+
+
+TABLE_ROWS = "n_kr\tn_h\tlength\tf1\tf2\tf3\tf4\n1\t0\t9\t0\t1\t0\t0\n2\t0\t12\t0\t0.6\t0.4\t0\n"
+
+
+def test_empirical_charge_model_uses_the_table_node(tmp_path):
+    table = tmp_path / "v1_charges.tsv"
+    table.write_text(TABLE_ROWS)
+    cmds = commands(base(charge_model="empirical", charge_table=str(table)), tmp_path / "dag")
+    pre = [c for c in cmds if "/timsim-precursors " in c]
+    assert len(pre) == 1 and "--charge-model empirical" in pre[0] and f"--charge-table {table}" in pre[0], pre
+
+
+def test_default_charge_model_command_is_unchanged(tmp_path):
+    # The site-specific node must keep its exact command, so existing caches stay valid.
+    pre = [c for c in commands(base(), tmp_path) if "/timsim-precursors " in c]
+    assert len(pre) == 1 and "--charge-model site-specific" in pre[0] and "--charge-table" not in pre[0], pre
+
+
+def test_charge_table_coupling_is_enforced(tmp_path):
+    table = tmp_path / "t.tsv"
+    table.write_text(TABLE_ROWS)
+    with pytest.raises(SystemExit, match="needs --charge-table"):
+        commands(base(charge_model="empirical"), tmp_path)
+    with pytest.raises(SystemExit, match="only used by --charge-model empirical"):
+        commands(base(charge_table=str(table)), tmp_path)
+    with pytest.raises(SystemExit, match="is not a file"):
+        commands(base(charge_model="empirical", charge_table=str(tmp_path / "missing.tsv")), tmp_path)
+
+
+def test_job_and_cli_agree_on_the_empirical_charge_model(tmp_path):
+    table = tmp_path / "t.tsv"
+    table.write_text(TABLE_ROWS)
+    cfg = base(charge_model="empirical", charge_table=str(table))
+    sample = cfg.pop("sample")
+    out = tmp_path / "dag"
+    assert masked(commands(dict(cfg, sample=sample), out)) == \
+        masked(cli_commands(as_argv(dict(cfg, samples=[sample])), out))
