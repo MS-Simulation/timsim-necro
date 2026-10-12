@@ -144,7 +144,11 @@ A noiseless render makes FDP trivially small, so the realism track (design: `REA
 - **A1 — signal m/z scatter** (`--noise-mz-ppm`, `--noise-frag-ppm`; ppm is a 3σ envelope; `--noise-seed`;
   `--noise-mz-uniform` for v1's uniform draw instead of the default Gaussian). Moves the *simulated* peaks.
   `0` — the default — keeps the render byte-identical to the noiseless baseline, so the reproducibility
-  gate still holds.
+  gate still holds. `--noise-mz-draw` sets the scope of one draw:
+  - `per-peak` (default): one offset per peak for the run. DIA-NN measures about 3 ppm, as on real timsTOF
+    runs.
+  - `per-observation`: v1's fresh offset per (frame, scan), which averages to about 0.6 ppm. Use it to
+    re-create v1 datasets.
 - **A2 — real-data background** (`--noise-real-data`, plus `--noise-precursor-frames`,
   `--noise-fragment-frames`, `--noise-intensity-max`, `--noise-precursor-fraction`,
   `--noise-fragment-fraction`). Samples real peaks out of the reference `.d` and injects them onto the

@@ -527,6 +527,10 @@ def _a1_kwargs(cfg) -> dict:
         "noise_mz_ppm": getattr(cfg, "noise_mz_ppm", 0.0),
         "noise_frag_ppm": getattr(cfg, "noise_frag_ppm", 0.0),
         "noise_seed": getattr(cfg, "noise_seed", 0),
+        # A valued flag, always passed (a conditionally-present one cannot be templated; see
+        # --ion-count-noise). Until this was wired, the flow's --noise-mz-uniform never reached the render.
+        "noise_mz_uniform": "true" if getattr(cfg, "noise_mz_uniform", False) else "false",
+        "noise_mz_draw": getattr(cfg, "noise_mz_draw", "per-peak"),
     }
 
 
@@ -1016,7 +1020,10 @@ _RENDER_HEAD = (
     "--ion-count-noise {ion_count_noise} --instrument-cv {instrument_cv} "
     "--run-rt-sd {run_rt_sd} --run-im-sd {run_im_sd} "
     "--run-intensity-cv {run_intensity_cv} --target-p {target_p} "
-    "--noise-mz-ppm {noise_mz_ppm} --noise-frag-ppm {noise_frag_ppm} --noise-seed {noise_seed}"
+    "--noise-mz-ppm {noise_mz_ppm} --noise-frag-ppm {noise_frag_ppm} --noise-seed {noise_seed} "
+    # The scope of one A1 draw: per-peak (default) or v1's per-observation; and the uniform draw shape.
+    # Explicit for the cache reason above (adding them re-fingerprints every DIA render once).
+    "--noise-mz-uniform {noise_mz_uniform} --noise-mz-draw {noise_mz_draw}"
 )
 _RENDER_A2 = (
     " --noise-real-data --noise-precursor-frames {noise_precursor_frames} "
@@ -1039,6 +1046,7 @@ def render(
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
     min_peak_intensity: int = 0, ms2_gain: float = 1.0,
+    noise_mz_uniform: str = "false", noise_mz_draw: str = "per-peak",
 ):
     """MEASUREMENT (Bruker): the lean v2 projector places `ion_spectra` onto the reference `.d`'s DIA grid.
     A1 signal-m/z noise is always wired (`--noise-mz-ppm/-frag-ppm`; 0 = off, byte-identical). One node per
@@ -1063,6 +1071,7 @@ def render_a2(
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
     min_peak_intensity: int = 0, ms2_gain: float = 1.0,
+    noise_mz_uniform: str = "false", noise_mz_draw: str = "per-peak",
 ):
     """render + A2 real-data background sampled from the reference `.d` (the v1 DIA recipe with A1)."""
     raw = output(BrukerRawDataV2)
@@ -1085,6 +1094,7 @@ def render_a2_control(
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
     min_peak_intensity: int = 0, ms2_gain: float = 1.0,
+    noise_mz_uniform: str = "false", noise_mz_draw: str = "per-peak",
 ):
     """A2 background-ONLY control (`--noise-only`): the real-data background alone, same seed — searched, its
     IDs subtracted from FDP (score_bruker_bg)."""
@@ -1106,6 +1116,7 @@ def render_spike(
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
     min_peak_intensity: int = 0, ms2_gain: float = 1.0,
+    noise_mz_uniform: str = "false", noise_mz_draw: str = "per-peak",
 ):
     """Spike-into-real: overlay the synthetic signal additively onto a real `.d` (`--spike-into`)."""
     raw = output(BrukerRawDataV2)
@@ -1126,6 +1137,7 @@ def render_spike_control(
     legacy_rt_sigma_mean: float = 1.5, legacy_rt_sigma_var: float = 0.3,
     legacy_rt_lambda_mean: float = 0.3, legacy_rt_lambda_var: float = 0.1,
     min_peak_intensity: int = 0, ms2_gain: float = 1.0,
+    noise_mz_uniform: str = "false", noise_mz_draw: str = "per-peak",
 ):
     """Spike background control (`--spike-into X --noise-only`): a re-encoded copy of X, no synthetic —
     searched, its IDs subtracted from FDP."""
@@ -2082,6 +2094,10 @@ def _parser() -> argparse.ArgumentParser:
                     help="A1: m/z scatter on fragment (MS2) peaks, ppm 3σ envelope. 0=off")
     ap.add_argument("--noise-mz-uniform", action="store_true",
                     help="A1: use v1's uniform m/z scatter (mz ± mz·ppm/1e6) instead of the default Gaussian")
+    ap.add_argument("--noise-mz-draw", default="per-peak", choices=["per-peak", "per-observation"],
+                    help="A1: the scope of one m/z draw (timsim-render --noise-mz-draw). per-peak = one offset "
+                         "per peak for the run (DIA-NN measures ~3 ppm, as on real timsTOF runs); per-observation "
+                         "= v1's fresh offset per (frame, scan), which averages to ~0.6 ppm (re-creating v1 data)")
     ap.add_argument("--noise-seed", type=int, default=0, help="seed for the (deterministic) noise draws")
     # A2 real-data background (Bruker DIA): sample real peaks from the reference .d (v1 add_real_data_noise).
     # v1's real DIA recipe runs A1 + A2 together; --noise-real-data + a nonzero --noise-mz-ppm reproduces it.
@@ -2172,6 +2188,7 @@ def build_cfg(a) -> SimpleNamespace:
         sign=getattr(a, "sign", True),
         sign_key=getattr(a, "sign_key", None),
         noise_mz_uniform=a.noise_mz_uniform,
+        noise_mz_draw=getattr(a, "noise_mz_draw", "per-peak"),
         noise_seed=a.noise_seed,
         noise_real_data=a.noise_real_data,
         noise_precursor_frames=a.noise_precursor_frames,
@@ -2227,6 +2244,12 @@ def select_build(a, ap: argparse.ArgumentParser | None = None):
     if gain != 1.0 and (a.sciex or a.thermo_template or a.bruker_dda or not (a.bruker_reference or a.spike_into)):
         # Only the Bruker DIA render implements it; anywhere else it would be silently ignored.
         fail("--ms2-gain applies to the Bruker DIA render only (--bruker-reference / --spike-into)")
+    not_bruker_dia = a.sciex or a.thermo_template or a.bruker_dda or not (a.bruker_reference or a.spike_into)
+    for flag, set_ in (("--noise-mz-draw", getattr(a, "noise_mz_draw", "per-peak") != "per-peak"),
+                       ("--noise-mz-uniform", bool(getattr(a, "noise_mz_uniform", False)))):
+        if set_ and not_bruker_dia:
+            # A1 noise reaches the Bruker DIA render only; anywhere else it would be silently ignored.
+            fail(f"{flag} applies to the Bruker DIA render only (--bruker-reference / --spike-into)")
     if getattr(a, "peak_shape", "per-peptide") != "per-peptide" and (a.sciex or a.thermo_template):
         # The Thermo/SCIEX renders are not given --peak-shape (they keep their own default), so any other
         # choice would be silently ignored there; per-peptide-legacy is not implemented by them at all.
