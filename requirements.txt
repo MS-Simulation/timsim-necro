@@ -2,8 +2,10 @@
 #
 # Orchestration framework (the typed DAG).
 # Pinned to a commit: 0.0.7 removed `resolve_command`, so an unpinned install can break the flow import.
-# 895e3d8 = 0.0.7 + main (2026-09-22), the revision the flow was ported to. Needs Python >= 3.11.
-necroflow @ git+https://github.com/MatteoLacki/necroflow@895e3d8d845c781e052548baa7ba0048f88801a6
+# e1b9356 = 0.0.8 + main (2026-10-06). Moved from 895e3d8 (0.0.7 + main, 2026-09-22) with the flow's tests
+# green and the DIA-H01 pilot DAG resolving to identical node fingerprints and plan (caches stay valid).
+# Needs Python >= 3.11.
+necroflow @ git+https://github.com/MatteoLacki/necroflow@e1b9356cfa0bf6029daedc3876bbb78f621cb789
 #
 # Prediction jobs (timsim-ccs / timsim-rt / timsim-fragments) — the pipeline's measurement step.
 # Pulls pepdl -> mscorepy (mscore+ms-chem pyo3 primitives). Fully imspy-free.
