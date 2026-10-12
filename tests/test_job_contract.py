@@ -210,7 +210,8 @@ def test_floor_reaches_the_bruker_renders(tmp_path):
         commands(base(bruker_reference=REF, min_peak_intensity=2.5), tmp_path)
 
 
-BIN = Path("/scratch/timsim-demo/timsim-cli/target/release/timsim-render")
+# Overridable so a binary built from a timsim-cli branch can be checked before the pin moves.
+BIN = Path(__import__("os").environ.get("TIMSIM_RENDER_BIN", "/scratch/timsim-demo/timsim-cli/target/release/timsim-render"))
 
 
 @pytest.mark.skipif(not BIN.exists(), reason="timsim-render binary not built here")
@@ -278,6 +279,67 @@ def test_ms2_gain_refused_without_a_bruker_render(tmp_path):
             commands(base(ms2_gain=2.0, **over), tmp_path)
     with pytest.raises(SystemExit, match="not a number|expected a number|not a string"):
         commands(base(ms2_gain="2.0"), tmp_path)  # a quoted number is a typo, as for every other key
+@needs_ref
+@pytest.mark.parametrize("over", [dict(bruker_reference=REF), dict(bruker_reference=REF, noise_real_data=True),
+                                  dict(spike_into=REF)])
+def test_a1_draw_flags_reach_every_bruker_dia_render(tmp_path, over):
+    # Plain, A2 + its --noise-only control, and spike + its control all share _RENDER_HEAD. Both flags are
+    # valued and always passed, so the default spelling is in every command.
+    cfg = base(search_fasta=str(CONF / "hela_subset.fasta"), noise_mz_ppm=6.5, noise_frag_ppm=6.5, **over)
+    want_n = 1 if over == dict(bruker_reference=REF) else 2
+    for extra, want in ((dict(), "--noise-mz-uniform false --noise-mz-draw per-peak"),
+                        (dict(noise_mz_draw="per-observation", noise_mz_uniform=True),
+                         "--noise-mz-uniform true --noise-mz-draw per-observation")):
+        renders = [c for c in commands(dict(cfg, **extra), tmp_path) if "/timsim-render --" in c]
+        assert len(renders) == want_n and all(want in c for c in renders), (extra, renders)
+
+
+@needs_ref
+def test_a1_draw_flags_move_the_render_fingerprint(tmp_path):
+    cfg = base(bruker_reference=REF, noise_mz_ppm=6.5, noise_frag_ppm=6.5)
+    out = lambda c: re.search(r"--out (\S+)", c).group(1)  # noqa: E731
+    render_out = lambda extra: {out(c) for c in commands(dict(cfg, **extra), tmp_path) if "/timsim-render --" in c}  # noqa: E731
+    base_out = render_out(dict())
+    assert len(base_out) == 1
+    for extra in (dict(noise_mz_draw="per-observation"), dict(noise_mz_uniform=True)):
+        assert render_out(extra).isdisjoint(base_out), extra
+
+
+@needs_ref
+def test_job_and_cli_agree_on_the_a1_draw_flags(tmp_path):
+    cfg = base(bruker_reference=REF, search_fasta=str(CONF / "hela_subset.fasta"), noise_mz_ppm=6.5,
+               noise_frag_ppm=6.5, noise_real_data=True, noise_mz_draw="per-observation", noise_mz_uniform=True)
+    sample = cfg.pop("sample")
+    assert masked(commands(dict(cfg, sample=sample), tmp_path)) == \
+        masked(cli_commands(as_argv(dict(cfg, samples=[sample])), tmp_path))
+
+
+def test_a1_draw_flags_refused_without_a_bruker_dia_render(tmp_path):
+    for flag in (dict(noise_mz_draw="per-observation"), dict(noise_mz_uniform=True)):
+        for over in (dict(sciex=True), dict(), dict(thermo_template="/nonexistent/template.raw")):
+            with pytest.raises(SystemExit, match="Bruker DIA render only"):
+                commands(base(**flag, **over), tmp_path)
+    with pytest.raises(SystemExit, match="expected one of"):
+        commands(base(noise_mz_draw="per-scan"), tmp_path)
+
+
+@needs_ref
+def test_a1_draw_flags_refused_for_bruker_dda(tmp_path):
+    with pytest.raises(SystemExit, match="Bruker DIA render only"):
+        commands(base(bruker_dda=REF, noise_mz_draw="per-observation"), tmp_path)
+
+
+@pytest.mark.skipif(not BIN.exists(), reason="timsim-render binary not built here")
+def test_the_render_binary_parses_the_a1_draw_spelling():
+    import subprocess
+    for args in (["--noise-mz-draw", "per-peak"], ["--noise-mz-draw", "per-observation"],
+                 ["--noise-mz-uniform", "false"], ["--noise-mz-uniform", "true"]):
+        r = subprocess.run([str(BIN), *args, "--precursors", "/nonexistent"], capture_output=True, text=True)
+        assert "unexpected argument" not in r.stderr and "invalid" not in r.stderr.lower(), (args, r.stderr[:300])
+    r = subprocess.run([str(BIN), "--noise-mz-draw", "per-scan"], capture_output=True, text=True)
+    assert "invalid" in r.stderr.lower()  # proves the check above can fail
+
+
 TABLE_ROWS = "n_kr\tn_h\tlength\tf1\tf2\tf3\tf4\n1\t0\t9\t0\t1\t0\t0\n2\t0\t12\t0\t0.6\t0.4\t0\n"
 
 

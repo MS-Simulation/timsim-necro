@@ -6,6 +6,6 @@ predict-deps:   ## the lean prediction + orchestration stack (necroflow + timsim
 	pip install -r requirements.txt
 
 rust-bins:      ## the timsim-cli protocol/render binaries — installed from git, crates.io deps only
-	cargo install --git https://github.com/MS-Simulation/timsim-cli --rev 7784cb62f5af9ef9a61fa222aa0d6d36fbf4f038 --locked --features tdf,thermo,sciex --root $(PREFIX)
+	cargo install --git https://github.com/MS-Simulation/timsim-cli --rev 72cc0761a3667c9f7566d2e697ebe38a3efff46a --locked --features tdf,thermo,sciex --root $(PREFIX)
 
 setup: predict-deps rust-bins   ## everything the simulator needs — no rustims, no imspy
