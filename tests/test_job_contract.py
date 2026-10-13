@@ -458,6 +458,8 @@ def test_per_organism_quotas_use_the_variant_digest_node(tmp_path):
 def test_spellings_of_one_draw_share_one_node(tmp_path):
     one = commands(hye(max_peptides=0, max_peptides_per_organism=QUOTAS), tmp_path)
     assert one == commands(hye(max_peptides=0, max_peptides_per_organism=" ECOLI=3369, YEAST=3528,HUMAN=03089"), tmp_path)
+    assert one == commands(hye(max_peptides=0, max_peptides_per_organism="ECOLI=3369,YEAST=3528,HUMAN=" + "0" * 5000 + "3089"),
+                           tmp_path)
     assert one != commands(hye(max_peptides=0, max_peptides_per_organism=QUOTAS, seed=7), tmp_path)
     assert one != commands(hye(max_peptides=0, max_peptides_per_organism="HUMAN=3089,YEAST=3528,ECOLI=3368"), tmp_path)
 
@@ -475,6 +477,7 @@ def test_empty_quotas_are_the_plain_digest(tmp_path):
     ("HUMAN=1_000", "not a non-negative 64-bit integer"),
     ("HUMAN=1.5", "not a non-negative 64-bit integer"),
     ("HUMAN=18446744073709551616", "not a non-negative 64-bit integer"),
+    ("HUMAN=" + "9" * 5000, "not a non-negative 64-bit integer"),  # past int()'s 4300-digit limit
     ("HUMAN=1,HUMAN=2", "named twice"),
     (5, "expected a string"),
 ])
@@ -529,7 +532,8 @@ def test_the_digest_binary_and_the_flow_agree_on_quota_spellings(tmp_path):
         assert r.returncode != 0, v
         return "max-peptides-per-organism" not in r.stderr
     for v in ("HUMAN=1", " HUMAN=1 , YEAST=0", "HUMAN=007", QUOTAS, "HUMAN=1,YEAST", "HUMAN=+1", "HUMAN=1_0",
-              "HUMAN=1,HUMAN=2", "=1", "HUMAN=1,", "HUMAN=18446744073709551616"):
+              "HUMAN=1,HUMAN=2", "=1", "HUMAN=1,", "HUMAN=18446744073709551616", "HUMAN=" + "0" * 5000 + "1",
+              "HUMAN=" + "9" * 5000):
         try:
             canonical = tf._organism_quotas(v, 0)
         except SystemExit:

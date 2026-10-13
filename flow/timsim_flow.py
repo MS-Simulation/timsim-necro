@@ -2139,7 +2139,7 @@ def _organism_quotas(spec: str, max_peptides: int) -> str:
                          "(one global sample, or one per organism)")
 
     def bad(why):
-        raise SystemExit(f"error: --max-peptides-per-organism {spec!r}: {why}")
+        raise SystemExit(f"error: --max-peptides-per-organism: {why}")
     quotas = {}
     for entry in spec.split(","):
         name, eq, n = entry.partition("=")
@@ -2148,11 +2148,14 @@ def _organism_quotas(spec: str, max_peptides: int) -> str:
             bad(f"{entry!r} is not ORG=N")
         if not name:
             bad(f"{entry!r} names no organism")
-        if not re.fullmatch(r"[0-9]+", n) or int(n) >= 2**64:  # not int(): it takes "+5", "1_000"
-            bad(f"{name}={n!r} is not a non-negative 64-bit integer")
+        # Digits only (int() alone would take "+5" and "1_000"); leading zeros are fine, as for the binary.
+        # Bounded by length BEFORE int(), which refuses a string of more than 4300 digits with a traceback.
+        digits = n.lstrip("0") or "0"
+        if not re.fullmatch(r"[0-9]+", n) or len(digits) > 20 or int(digits) >= 2**64:
+            bad(f"{name}={n[:40]!r} is not a non-negative 64-bit integer")
         if name in quotas:
             bad(f"{name!r} is named twice")
-        quotas[name] = int(n)
+        quotas[name] = int(digits)
     return ",".join(f"{name}={n}" for name, n in sorted(quotas.items()))
 
 
