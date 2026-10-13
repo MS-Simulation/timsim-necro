@@ -418,3 +418,122 @@ def test_job_and_cli_agree_on_the_empirical_charge_model(tmp_path):
     out = tmp_path / "dag"
     assert masked(commands(dict(cfg, sample=sample), out)) == \
         masked(cli_commands(as_argv(dict(cfg, samples=[sample])), out))
+
+
+# ── --max-peptides-per-organism: a digest node VARIANT, so the plain digest keeps its exact command ──
+QUOTAS = "HUMAN=3089,YEAST=3528,ECOLI=3369"  # the v1 HYE truth's unique sequences per organism
+
+
+def hye(**over):
+    return base(proteome_spec=str(CONF / "hye.toml"), design_spec=str(CONF / "design.toml"), **over)
+
+
+def digest_command(cmds):
+    d = [c for c in cmds if "/timsim-digest " in c]
+    assert len(d) == 1, d
+    return d[0]
+
+
+def test_default_digest_command_is_unchanged(tmp_path):
+    # The plain node must keep its EXACT command (and so its fingerprint), so existing caches stay valid.
+    got = digest_command(commands(base(), tmp_path))
+    got = re.sub(r"[0-9a-f]{64}", "<fp>", got.replace(str(tmp_path), "<OUT>"))
+    got = re.sub(r"tools:timsim-digest=\S+", "tools:timsim-digest=<sha>", got).split("/timsim-digest ", 1)[1]
+    # Verified byte-identical (fingerprints included) to `main` before this option existed.
+    assert got == (
+        "--proteome <OUT>/proteome/<fp>/proteome.parquet --out-peptides <OUT>/digest/<fp>/peptides.parquet "
+        "--out-occurrences <OUT>/digest/<fp>/peptide_occurrences.parquet "
+        "--out-cleavage-sites <OUT>/digest/<fp>/cleavage_sites.parquet --max-missed-cleavages 2 --min-length 7 "
+        "--max-length 30 --max-peptides 5000 --seed 41  # tools:timsim-digest=<sha>"), got
+
+
+def test_per_organism_quotas_use_the_variant_digest_node(tmp_path):
+    cmds = commands(hye(max_peptides=0, max_peptides_per_organism=QUOTAS), tmp_path)
+    d = digest_command(cmds)
+    assert "/digest_per_organism/" in d and "--max-peptides " not in d, d
+    assert "--max-peptides-per-organism ECOLI=3369,HUMAN=3089,YEAST=3528 --seed 41 " in d, d  # sorted
+    assert not any("/digest/" in c for c in cmds), "something still reads the plain digest"
+
+
+def test_spellings_of_one_draw_share_one_node(tmp_path):
+    one = commands(hye(max_peptides=0, max_peptides_per_organism=QUOTAS), tmp_path)
+    assert one == commands(hye(max_peptides=0, max_peptides_per_organism=" ECOLI=3369, YEAST=3528,HUMAN=03089"), tmp_path)
+    assert one != commands(hye(max_peptides=0, max_peptides_per_organism=QUOTAS, seed=7), tmp_path)
+    assert one != commands(hye(max_peptides=0, max_peptides_per_organism="HUMAN=3089,YEAST=3528,ECOLI=3368"), tmp_path)
+
+
+def test_empty_quotas_are_the_plain_digest(tmp_path):
+    assert commands(base(max_peptides_per_organism=""), tmp_path) == commands(base(), tmp_path)
+
+
+@pytest.mark.parametrize("value,why", [
+    ("HUMAN=3089,YEAST", "is not ORG=N"),
+    ("HUMAN=1,", "is not ORG=N"),
+    ("=5", "names no organism"),
+    ("HUMAN=-1", "not a non-negative 64-bit integer"),
+    ("HUMAN=+5", "not a non-negative 64-bit integer"),
+    ("HUMAN=1_000", "not a non-negative 64-bit integer"),
+    ("HUMAN=1.5", "not a non-negative 64-bit integer"),
+    ("HUMAN=18446744073709551616", "not a non-negative 64-bit integer"),
+    ("HUMAN=1,HUMAN=2", "named twice"),
+    (5, "expected a string"),
+])
+def test_quotas_are_refused_before_anything_runs(tmp_path, value, why):
+    with pytest.raises(SystemExit, match=why):
+        commands(hye(max_peptides=0, max_peptides_per_organism=value), tmp_path)
+
+
+def test_quotas_and_a_global_cap_are_exclusive(tmp_path):
+    with pytest.raises(SystemExit, match="exclusive"):
+        commands(hye(max_peptides_per_organism=QUOTAS), tmp_path)  # base() caps at 5000
+    import subprocess
+    r = subprocess.run([sys.executable, str(FLOW / "timsim_flow.py"), "--outdir", str(tmp_path), "--max-peptides", "5000",
+                        "--max-peptides-per-organism", QUOTAS, "--dry-run"], capture_output=True, text=True, cwd=FLOW)
+    assert r.returncode != 0 and "exclusive" in r.stderr, r.stderr[-300:]
+
+
+def test_job_and_cli_agree_on_per_organism_quotas(tmp_path):
+    cfg = hye(max_peptides=0, max_peptides_per_organism=QUOTAS)
+    sample = cfg.pop("sample")
+    assert masked(commands(dict(cfg, sample=sample), tmp_path)) == \
+        masked(cli_commands(as_argv(dict(cfg, samples=[sample])), tmp_path))
+
+
+@needs_ref
+def test_quotas_reach_the_signed_config_only_when_set(tmp_path):
+    # Every cfg key is signed (do_sign), so an always-present empty quota key would have re-fingerprinted every
+    # existing sign node.
+    sign = lambda cfg: [c for c in commands(cfg, tmp_path) if "sign_output.py" in c]  # noqa: E731
+    plain = sign(hye(bruker_reference=REF))
+    assert len(plain) == 1 and "max_peptides_per_organism" not in plain[0], plain
+    quota = sign(hye(bruker_reference=REF, max_peptides=0, max_peptides_per_organism=QUOTAS))
+    assert len(quota) == 1 and "ECOLI=3369,HUMAN=3089,YEAST=3528" in quota[0], quota
+
+
+# Overridable so a binary built from a timsim-cli branch can be checked before the pin moves.
+DIGEST_BIN = Path(__import__("os").environ.get(
+    "TIMSIM_DIGEST_BIN", "/scratch/timsim-demo/timsim-cli/target/release/timsim-digest"))
+
+
+@pytest.mark.skipif(not DIGEST_BIN.exists(), reason="timsim-digest binary not built here")
+def test_the_digest_binary_and_the_flow_agree_on_quota_spellings(tmp_path):
+    # Whatever the flow accepts (and its canonical spelling) the binary's parser accepts, and whatever the flow
+    # refuses it refuses. With no proteome the binary fails either way, but only a refused spelling names the flag.
+    import subprocess
+
+    def binary_accepts(v):
+        out = [str(tmp_path / f) for f in ("p.parquet", "o.parquet", "c.parquet")]
+        r = subprocess.run([str(DIGEST_BIN), "--proteome", "/nonexistent", "--out-peptides", out[0],
+                            "--out-occurrences", out[1], "--out-cleavage-sites", out[2],
+                            "--max-peptides-per-organism", v], capture_output=True, text=True)
+        assert r.returncode != 0, v
+        return "max-peptides-per-organism" not in r.stderr
+    for v in ("HUMAN=1", " HUMAN=1 , YEAST=0", "HUMAN=007", QUOTAS, "HUMAN=1,YEAST", "HUMAN=+1", "HUMAN=1_0",
+              "HUMAN=1,HUMAN=2", "=1", "HUMAN=1,", "HUMAN=18446744073709551616"):
+        try:
+            canonical = tf._organism_quotas(v, 0)
+        except SystemExit:
+            canonical = None
+        assert binary_accepts(v) == (canonical is not None), v
+        if canonical:
+            assert binary_accepts(canonical), canonical

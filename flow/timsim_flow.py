@@ -669,12 +669,14 @@ def proteome(proteome_spec: str):
     return proteome
 
 
-@command(
+_DIGEST_HEAD = (
     f"{BIN}/timsim-digest --proteome {{proteome}} "
     "--out-peptides {peptides} --out-occurrences {occurrences} --out-cleavage-sites {cleavage_sites} "
     "--max-missed-cleavages {max_missed_cleavages} --min-length {min_length} --max-length {max_length} "
-    "--max-peptides {max_peptides} --seed {seed}"
 )
+
+
+@command(_DIGEST_HEAD + "--max-peptides {max_peptides} --seed {seed}")
 def digest(proteome: Proteome, max_missed_cleavages: int, min_length: int, max_length: int,
            max_peptides: int, seed: int):
     """Proteins -> peptides. STRUCTURE, so it is computed once for every sample in the design.
@@ -687,6 +689,30 @@ def digest(proteome: Proteome, max_missed_cleavages: int, min_length: int, max_l
     occurrences = output(Occurrences)
     cleavage_sites = output(CleavageSites)
     return peptides, occurrences, cleavage_sites
+
+
+@command(_DIGEST_HEAD + "--max-peptides-per-organism {max_peptides_per_organism} --seed {seed}")
+def digest_per_organism(proteome: Proteome, max_missed_cleavages: int, min_length: int, max_length: int,
+                        max_peptides_per_organism: str, seed: int):
+    """`digest` with the seeded sample drawn PER ORGANISM (`ORG=N,...`, timsim-digest
+    `--max-peptides-per-organism`): v1's HYE dataset sampled each FASTA on its own and pooled them,
+    whereas one global sample hands the largest proteome most of the peptides. A node variant rather
+    than a flag on `digest`, because a template cannot include a flag conditionally and `digest`'s
+    command (so every existing digest fingerprint) must not move."""
+    peptides = output(Peptides)
+    occurrences = output(Occurrences)
+    cleavage_sites = output(CleavageSites)
+    return peptides, occurrences, cleavage_sites
+
+
+def do_digest(P, cfg):
+    """The digest node for cfg's peptide sampling (one call site per pipeline)."""
+    common = dict(max_missed_cleavages=cfg.max_missed_cleavages, min_length=cfg.min_length,
+                  max_length=cfg.max_length, seed=cfg.seed)
+    quotas = getattr(cfg, "max_peptides_per_organism", "")  # absent unless set; see build_cfg
+    if quotas:
+        return digest_per_organism(P, P.proteome, max_peptides_per_organism=quotas, **common)
+    return digest(P, P.proteome, max_peptides=cfg.max_peptides, **common)
 
 
 @command(
@@ -1555,14 +1581,7 @@ def timsim_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
     """
     P.proteome = proteome(P, proteome_spec=cfg.proteome_spec)
 
-    P.peptides, P.occurrences, P.cleavage_sites = digest(P, 
-        P.proteome,
-        max_missed_cleavages=cfg.max_missed_cleavages,
-        min_length=cfg.min_length,
-        max_length=cfg.max_length,
-        max_peptides=cfg.max_peptides,
-        seed=cfg.seed,
-    )
+    P.peptides, P.occurrences, P.cleavage_sites = do_digest(P, cfg)
 
     P.modforms, P.modifications = modify(P, P.peptides, mods_spec=cfg.mods, floor=cfg.floor)
 
@@ -1616,14 +1635,7 @@ def timsim_thermo_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
     fan-out over `cfg.template` × `cfg.frag_model`.
     """
     P.proteome = proteome(P, proteome_spec=cfg.proteome_spec)
-    P.peptides, P.occurrences, P.cleavage_sites = digest(P, 
-        P.proteome,
-        max_missed_cleavages=cfg.max_missed_cleavages,
-        min_length=cfg.min_length,
-        max_length=cfg.max_length,
-        max_peptides=cfg.max_peptides,
-        seed=cfg.seed,
-    )
+    P.peptides, P.occurrences, P.cleavage_sites = do_digest(P, cfg)
     P.modforms, P.modifications = modify(P, P.peptides, mods_spec=cfg.mods, floor=cfg.floor)
     P.precursors = do_precursors(P, cfg)
     P.rt = rt(P, P.peptides)
@@ -1686,14 +1698,7 @@ def timsim_bruker_v2_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
     collapses the whole structure axis to one computation. Opt-in via `--bruker-reference <ref.d>`; the
     v1 `timsim_pipeline` stays the default (it owns DDA + the DIA truth output v2 does not yet emit)."""
     P.proteome = proteome(P, proteome_spec=cfg.proteome_spec)
-    P.peptides, P.occurrences, P.cleavage_sites = digest(P, 
-        P.proteome,
-        max_missed_cleavages=cfg.max_missed_cleavages,
-        min_length=cfg.min_length,
-        max_length=cfg.max_length,
-        max_peptides=cfg.max_peptides,
-        seed=cfg.seed,
-    )
+    P.peptides, P.occurrences, P.cleavage_sites = do_digest(P, cfg)
     P.modforms, P.modifications = modify(P, P.peptides, mods_spec=cfg.mods, floor=cfg.floor)
     P.precursors = do_precursors(P, cfg)
     P.ccs = ccs(P, P.precursors, P.peptides)
@@ -1790,14 +1795,7 @@ def timsim_hye_quant_pipeline(P: Pipeline, cfg, sample_ids) -> None:
     run] (e.g. ["A_R1", "B_R1"]); A is the reference. Opt-in via `--quant`. See HYE_QUANT.md."""
     sid_a, sid_b = sample_ids
     P.proteome = proteome(P, proteome_spec=cfg.proteome_spec)
-    P.peptides, P.occurrences, P.cleavage_sites = digest(P, 
-        P.proteome,
-        max_missed_cleavages=cfg.max_missed_cleavages,
-        min_length=cfg.min_length,
-        max_length=cfg.max_length,
-        max_peptides=cfg.max_peptides,
-        seed=cfg.seed,
-    )
+    P.peptides, P.occurrences, P.cleavage_sites = do_digest(P, cfg)
     P.modforms, P.modifications = modify(P, P.peptides, mods_spec=cfg.mods, floor=cfg.floor)
     P.precursors = do_precursors(P, cfg)
     P.ccs = ccs(P, P.precursors, P.peptides)
@@ -1840,14 +1838,7 @@ def timsim_bruker_dda_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
     `timsim-render --dda` (top-N selection) and phase-2 is Sage → `v2_dda_eval` (DiaNN is DIA-only).
     Opt-in via `--bruker-dda <ref.d>`."""
     P.proteome = proteome(P, proteome_spec=cfg.proteome_spec)
-    P.peptides, P.occurrences, P.cleavage_sites = digest(P, 
-        P.proteome,
-        max_missed_cleavages=cfg.max_missed_cleavages,
-        min_length=cfg.min_length,
-        max_length=cfg.max_length,
-        max_peptides=cfg.max_peptides,
-        seed=cfg.seed,
-    )
+    P.peptides, P.occurrences, P.cleavage_sites = do_digest(P, cfg)
     P.modforms, P.modifications = modify(P, P.peptides, mods_spec=cfg.mods, floor=cfg.floor)
     P.precursors = do_precursors(P, cfg)
     P.ccs = ccs(P, P.precursors, P.peptides)
@@ -1907,14 +1898,7 @@ def timsim_sciex_pipeline(P: Pipeline, cfg, sample_id: str) -> None:
     Thermo/Bruker pipelines (so requesting all three collapses the structure to one computation), then
     projects onto a synthesised SWATH schedule. No CCS (SCIEX has no ion mobility)."""
     P.proteome = proteome(P, proteome_spec=cfg.proteome_spec)
-    P.peptides, P.occurrences, P.cleavage_sites = digest(P, 
-        P.proteome,
-        max_missed_cleavages=cfg.max_missed_cleavages,
-        min_length=cfg.min_length,
-        max_length=cfg.max_length,
-        max_peptides=cfg.max_peptides,
-        seed=cfg.seed,
-    )
+    P.peptides, P.occurrences, P.cleavage_sites = do_digest(P, cfg)
     P.modforms, P.modifications = modify(P, P.peptides, mods_spec=cfg.mods, floor=cfg.floor)
     P.precursors = do_precursors(P, cfg)
     P.rt = rt(P, P.peptides)
@@ -2018,6 +2002,11 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-peptides", type=int, default=0,
                     help="cap the simulated peptides to this many (seeded sample; 0 = full analytic digest). "
                          "Keeps the full FASTA as the DiaNN search space — for a tractable run on a big proteome.")
+    ap.add_argument("--max-peptides-per-organism", default="", metavar="ORG=N,...",
+                    help="the --max-peptides sample drawn per organism of the proteome spec, e.g. "
+                         "HUMAN=3089,YEAST=3528,ECOLI=3369 (v1's HYE mix; one global sample gives the "
+                         "largest proteome most of the peptides). Every organism must be named; exclusive "
+                         "with --max-peptides; '' = off. Its own digest node, so plain runs keep theirs")
     ap.add_argument("--dry-run", action="store_true")
     # mzprov signing (on by default, as in v1): a leaf node beside each render; never alters the render.
     ap.add_argument("--no-sign", dest="sign", action="store_false",
@@ -2137,9 +2126,39 @@ def _parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _organism_quotas(spec: str, max_peptides: int) -> str:
+    """`--max-peptides-per-organism` -> its canonical spelling (sorted by organism), or "" when off.
+
+    The spelling rules are timsim-digest's, so a typo fails here, before any node has run. Sorting only
+    makes two spellings of one draw share a node: the binary draws organisms in sorted order regardless.
+    Whether the names match the proteome's organisms is the binary's check, against the proteome itself."""
+    if not spec.strip():
+        return ""
+    if max_peptides != 0:  # the variant node does not pass it, so any other value would go unused
+        raise SystemExit("error: --max-peptides and --max-peptides-per-organism are exclusive "
+                         "(one global sample, or one per organism)")
+
+    def bad(why):
+        raise SystemExit(f"error: --max-peptides-per-organism {spec!r}: {why}")
+    quotas = {}
+    for entry in spec.split(","):
+        name, eq, n = entry.partition("=")
+        name, n = name.strip(), n.strip()
+        if not eq:
+            bad(f"{entry!r} is not ORG=N")
+        if not name:
+            bad(f"{entry!r} names no organism")
+        if not re.fullmatch(r"[0-9]+", n) or int(n) >= 2**64:  # not int(): it takes "+5", "1_000"
+            bad(f"{name}={n!r} is not a non-negative 64-bit integer")
+        if name in quotas:
+            bad(f"{name!r} is named twice")
+        quotas[name] = int(n)
+    return ",".join(f"{name}={n}" for name, n in sorted(quotas.items()))
+
+
 def build_cfg(a) -> SimpleNamespace:
     """Parsed args -> the config object every pipeline factory consumes."""
-    return SimpleNamespace(
+    cfg = SimpleNamespace(
         proteome_spec=a.proteome_spec,
         max_missed_cleavages=2,
         min_length=7,
@@ -2221,6 +2240,13 @@ def build_cfg(a) -> SimpleNamespace:
         mz_max=a.sciex_mz_max,
         window_width=a.sciex_window_width,
     )
+    # Validated here, so the CLI and job() refuse the same spellings. Set ONLY when given: every cfg key
+    # also lands in the signed run config (do_sign), so an always-present empty one would re-fingerprint
+    # every existing sign node. do_digest reads it with a default.
+    quotas = _organism_quotas(getattr(a, "max_peptides_per_organism", ""), a.max_peptides)
+    if quotas:
+        cfg.max_peptides_per_organism = quotas
+    return cfg
 
 
 def select_build(a, ap: argparse.ArgumentParser | None = None):

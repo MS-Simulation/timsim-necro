@@ -206,6 +206,10 @@ SHA-256; the renderer is identified by binary name and content hash. `--no-sign`
 - **`--max-peptides N`** — the density knob used throughout: cap the simulation to a seeded sample of the
   analytic digest (`0` = no cap) while keeping the full FASTA as the search space. It is a seeded-shuffle
   *prefix*, so for a fixed seed the levels are nested — a clean superset ladder.
+- **`--max-peptides-per-organism ORG=N,...`** — the same sample drawn per organism of the proteome spec
+  (`HUMAN=3089,YEAST=3528,ECOLI=3369` is the v1 HYE truth's mix; one global cap gives HUMAN ~73% of the
+  peptides). Every organism must be named; exclusive with `--max-peptides`. It runs as its own node
+  (`digest_per_organism`), so the plain `digest` node and its cache are untouched.
 
 ## Layout
 ```
